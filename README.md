@@ -128,7 +128,6 @@ python -m aethelum_core_lite.examples.main
 
 示例程序提供：
 - 📋 交互式菜单选择不同示例
-- ⚙️ OpenAI客户端配置向导
 - 🔍 内容安全审查基础示例
 - 🚀 高级多线程功能演示
 - 📦 ProtoBuf集成完整示例
@@ -171,23 +170,6 @@ impulse = NeuralImpulse(
 )
 router.inject_input(impulse)
 ```
-
-## 内容安全审查系统
-
-系统提供完整的内容安全检查机制：
-
-### 违规类型
-- `AnimalAbuse`: 虐待动物
-- `SuicideSelfHarm`: 自杀与自残
-- `Violence`: 暴力行为
-- `HarmToOthers`: 对他人的致命伤害
-- `SexualContent`: 性暗示内容
-- `IllegalActivity`: 违法犯罪活动
-
-### 双重随机性验证
-- `primary_shift`: 主要加密偏移量 (1-25)
-- `secondary_seed`: 辅助随机种子 (1-25)
-- `final_shift`: 最终偏移量 = (primary_shift + secondary_seed) % 26
 
 ## 配置
 
