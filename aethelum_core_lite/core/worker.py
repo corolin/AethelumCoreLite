@@ -212,8 +212,8 @@ class AxonWorker(threading.Thread):
             if (self.queue.name == 'Q_DONE' and target_queue == "Done"):
                 return
 
-            # 添加当前队列到路由历史
-            impulse.add_to_history(self.queue.name)
+            # 添加当前队列到路由历史，使用QUEUE:前缀区分队列名称和Agent名称
+            impulse.add_to_history(f"QUEUE:{self.queue.name}")
 
             # Done action intent 映射到 Q_DONE 队列
             if target_queue == "Done":

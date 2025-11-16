@@ -25,6 +25,9 @@ def create_default_error_handler():
 
         logger.error(f"错误处理器接收到的错误 - 来源: {error_source}, 消息: {error_message}, 原始会话ID: {original_session_id}, 错误脉冲ID: {impulse.session_id}")
 
+        # 更新源Agent记录
+        impulse.update_source("ErrorHandler")
+
         # 清除action_intent以防止自动路由（Q_ERROR_HANDLER是终点）
         impulse.action_intent = "Done"
         return impulse

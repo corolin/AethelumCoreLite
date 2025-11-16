@@ -98,6 +98,9 @@ def create_response_sink():
         final_response['session_id'] = impulse.session_id
         response_received.set()
 
+        # 更新源Agent记录
+        impulse.update_source("ResponseSink")
+
         # 终止消息流 - 设置为 Done
         impulse.action_intent = "Done"
 

@@ -388,6 +388,8 @@ class NeuralSomaRouter:
             return False
 
         impulse.action_intent = 'Q_AUDIT_INPUT'
+        # 添加初始处理节点记录
+        impulse.add_to_history("INPUT_GATEWAY")
         return self._send_to_queue('Q_AUDIT_INPUT', impulse)
 
     def _send_to_queue(self, queue_name: str, impulse: NeuralImpulse) -> bool:
