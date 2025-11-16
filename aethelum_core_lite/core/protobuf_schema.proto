@@ -1,0 +1,70 @@
+syntax = "proto3";
+
+package aethelum_core_lite;
+
+// 神经脉冲消息的ProtoBuf定义
+message NeuralImpulseProto {
+  // 基本信息
+  string session_id = 1;                    // 会话唯一标识符
+  string action_intent = 2;                  // 下一个处理队列名称（路由键）
+  string source_agent = 3;                   // 源Agent标识符
+  string input_source = 4;                   // 消息来源标识（USER, API, SYSTEM等）
+
+  // 内容数据 - 使用统一的RequestContent类型
+  RequestContent content = 5;                // 统一的消息内容
+
+  // 元数据和路由信息
+  map<string, string> metadata = 6;          // 元数据字典
+  repeated string routing_history = 7;       // 路由历史记录
+  int64 timestamp = 8;                       // 时间戳（Unix时间戳）
+
+  // 扩展字段
+  map<string, google.protobuf.Any> extensions = 9;  // 扩展字段，支持自定义数据
+}
+
+// 统一的消息内容类型
+message RequestContent {
+  string user_input = 1;                     // 用户输入/主要文本内容
+  string context = 2;                        // 上下文信息
+  string response_content = 3;               // AI响应内容
+  string model_name = 4;                     // 使用的模型名称
+  double confidence_score = 5;               // 置信度分数
+  int32 token_count = 6;                     // Token数量
+  string processing_time = 7;                // 处理时间
+  repeated string conversation_history = 8;  // 对话历史
+  map<string, string> user_preferences = 9;  // 用户偏好
+  string content_type = 10;                  // 内容类型标识（input, output, audit, business等）
+
+  // 审计相关字段
+  string caesar_shift = 11;                  // 凯撒加密偏移量（用于审计）
+  string nonce = 12;                         // 16位随机文本（用于审计）
+  string request_id = 13;                    // 请求唯一标识符（用于审计）
+  string audit_status = 14;                  // 审计状态（clear/dirty/normal等）
+  string audit_type = 15;                    // 审计类型
+}
+
+// 系统提示词消息
+message SystemPrompt {
+  string prompt_type = 1;                    // 提示词类型（audit, business, response等）
+  string prompt_content = 2;                 // 提示词内容
+  int32 version = 3;                         // 版本号
+  repeated string parameters = 4;             // 参数列表
+}
+
+// 错误信息消息
+message ErrorInfo {
+  string error_code = 1;                     // 错误代码
+  string error_message = 2;                  // 错误消息
+  string stack_trace = 3;                    // 堆栈跟踪
+  map<string, string> context = 4;           // 错误上下文
+}
+
+// 统计信息消息
+message Statistics {
+  int32 processed_count = 1;                 // 处理计数
+  double success_rate = 2;                   // 成功率
+  double avg_processing_time = 3;            // 平均处理时间
+  map<string, int32> status_distribution = 4; // 状态分布
+}
+
+import "google/protobuf/any.proto";
