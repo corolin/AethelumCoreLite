@@ -77,7 +77,7 @@ def main():
     """主检查函数"""
     print("=" * 80)
     print("🚀 Aethelum Core Lite - 依赖检查")
-    print("📦 灵壤精核 - 模拟神经网络的通信框架")
+    print("📦 灵壤精核 - 模拟树神经系统的通信框架")
     print("=" * 80)
     print()
 

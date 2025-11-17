@@ -43,7 +43,7 @@ def print_banner():
     """打印程序横幅"""
     print("=" * 80)
     print("🚀 Aethelum Core Lite - 示例程序主入口")
-    print("📦 灵壤精核 - 模拟神经网络的通信框架")
+    print("📦 灵壤精核 - 模拟树神经系统的通信框架")
     print("⚡ 支持并发处理 | 🛡️ 内置安全审查 | 🎯 统一架构")
     print("=" * 80)
     print()

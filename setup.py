@@ -1,6 +1,6 @@
 """
 Aethelum Core Lite - 灵壤精核
-模拟神经网络的通信框架
+模拟树神经系统的通信框架
 """
 
 from setuptools import setup, find_packages
@@ -12,7 +12,7 @@ def read_readme():
     if os.path.exists(readme_path):
         with open(readme_path, 'r', encoding='utf-8') as f:
             return f.read()
-    return "Aethelum Core Lite - 神经网络通信框架"
+    return "Aethelum Core Lite - 灵壤精核 - 模拟树神经系统的通信框架"
 
 # 读取requirements文件
 def read_requirements():
@@ -31,7 +31,7 @@ setup(
     version="1.0.0",
     author="Aethelum Team",
     author_email="team@aethelum.ai",
-    description="模拟神经网络的通信框架",
+    description="模拟树神经系统的通信框架",
     long_description=read_readme(),
     long_description_content_type="text/markdown",
     url="https://github.com/aethelum/aethelum-core-lite",

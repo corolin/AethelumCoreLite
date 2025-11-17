@@ -1,5 +1,5 @@
 # Aethelum Core Lite 依赖包
-# 神经网络通信框架
+# 模拟树神经系统的通信框架
 
 # 核心AI依赖
 openai>=1.0.0

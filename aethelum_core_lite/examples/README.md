@@ -58,7 +58,7 @@ python -m aethelum_core_lite.examples.single_example
 ### 1. 基础示例 (`basic_example.py`)
 
 **功能演示：**
-- 神经网络框架的基本使用
+- 模拟树神经系统的通信框架的基本使用
 - 强制性安全队列概念
 - 简单的消息传递流程
 - Agent工作原理展示
