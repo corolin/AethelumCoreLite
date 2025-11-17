@@ -190,3 +190,4 @@ config.json
 .env.*
 secrets.json
 .claude/
+.docs/
