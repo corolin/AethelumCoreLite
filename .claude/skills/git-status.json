@@ -1,0 +1,18 @@
+{
+  "title": "Git状态",
+  "description": "查看Git仓库状态和变更摘要",
+  "command": "git-status",
+  "arguments": [
+    {
+      "name": "detailed",
+      "description": "显示详细的差异信息",
+      "required": false,
+      "type": "boolean",
+      "default": false
+    }
+  ],
+  "examples": [
+    "git-status",
+    "git-status --detailed"
+  ]
+}

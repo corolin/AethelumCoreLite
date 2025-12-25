@@ -1,0 +1,23 @@
+{
+  "title": "Git提交",
+  "description": "创建Git提交，包含代码审查和多文件处理",
+  "command": "git-commit",
+  "arguments": [
+    {
+      "name": "message",
+      "description": "提交信息",
+      "required": true
+    },
+    {
+      "name": "all",
+      "description": "添加所有变更文件",
+      "required": false,
+      "type": "boolean",
+      "default": true
+    }
+  ],
+  "examples": [
+    "git-commit \"feat: 添加新的Hook链管理功能\"",
+    "git-commit \"fix: 修复工作器调度bug\" --all"
+  ]
+}

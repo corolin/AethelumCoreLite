@@ -1,0 +1,32 @@
+{
+  "title": "运行测试",
+  "description": "运行项目的所有测试或指定测试文件",
+  "command": "pytest",
+  "arguments": [
+    {
+      "name": "test_path",
+      "description": "测试文件路径（可选，默认运行所有测试）",
+      "required": false,
+      "default": "tests/"
+    },
+    {
+      "name": "verbose",
+      "description": "显示详细输出",
+      "required": false,
+      "type": "boolean",
+      "default": true
+    },
+    {
+      "name": "coverage",
+      "description": "生成测试覆盖率报告",
+      "required": false,
+      "type": "boolean",
+      "default": false
+    }
+  ],
+  "examples": [
+    "test",
+    "test tests/test_message.py",
+    "test --coverage"
+  ]
+}

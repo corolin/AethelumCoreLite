@@ -1,0 +1,18 @@
+{
+  "title": "编译ProtoBuf",
+  "description": "编译protobuf schema文件生成Python代码",
+  "command": "protoc",
+  "arguments": [
+    {
+      "name": "clean",
+      "description": "编译前清理旧文件",
+      "required": false,
+      "type": "boolean",
+      "default": false
+    }
+  ],
+  "examples": [
+    "compile-protobuf",
+    "compile-protobuf --clean"
+  ]
+}

@@ -1,0 +1,24 @@
+{
+  "title": "格式化代码",
+  "description": "使用black格式化Python代码",
+  "command": "black",
+  "arguments": [
+    {
+      "name": "path",
+      "description": "要格式化的文件或目录路径",
+      "required": false,
+      "default": "aethelum_core_lite/"
+    },
+    {
+      "name": "check",
+      "description": "只检查不修改",
+      "required": false,
+      "type": "boolean",
+      "default": false
+    }
+  ],
+  "examples": [
+    "format-code",
+    "format-code --check"
+  ]
+}
