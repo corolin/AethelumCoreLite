@@ -1,287 +1,439 @@
-"""
-轴突工作器 (AxonWorker)
-
-基于Python threading.Thread实现的工作器线程，负责传递神经信号。
-"""
-
 import threading
 import time
-import logging
-import traceback
-from typing import Callable, Dict, Optional, Any
+import uuid
+from typing import Dict, List, Optional, Callable, Any, Tuple
+from enum import Enum
+from dataclasses import dataclass, field
+from queue import Queue, Empty
+
 from .message import NeuralImpulse
 from .queue import SynapticQueue
+# 使用类型注解字符串避免循环导入
+# from .router import NeuralSomaRouter
+from ..hooks.base_hook import BaseHook
+
+
+class WorkerState(Enum):
+    """工作器状态枚举"""
+    INITIALIZING = "initializing"
+    RUNNING = "running"
+    PAUSED = "paused"
+    STOPPING = "stopping"
+    STOPPED = "stopped"
+    ERROR = "error"
+    RECOVERING = "recovering"
+
+
+class ErrorType(Enum):
+    """错误类型枚举"""
+    VALIDATION_ERROR = "validation_error"
+    PROCESSING_ERROR = "processing_error"
+    ROUTING_ERROR = "routing_error"
+    QUEUE_ERROR = "queue_error"
+    HOOK_ERROR = "hook_error"
+    SYSTEM_ERROR = "system_error"
+    TIMEOUT_ERROR = "timeout_error"
+
+
+@dataclass
+class WorkerStats:
+    """工作器统计信息"""
+    worker_id: str
+    name: str
+    state: WorkerState = WorkerState.INITIALIZING
+    start_time: float = field(default_factory=time.time)
+    last_activity: float = field(default_factory=time.time)
+    processed_messages: int = 0
+    failed_messages: int = 0
+    total_processing_time: float = 0.0
+    average_processing_time: float = 0.0
+    success_rate: float = 0.0
+    error_counts: Dict[str, int] = field(default_factory=dict)
+    last_error: Optional[str] = None
+    last_error_time: Optional[float] = None
+    recovery_attempts: int = 0
+    consecutive_failures: int = 0
+    health_score: float = 100.0
+    uptime: float = 0.0
 
 
 class AxonWorker(threading.Thread):
+    """神经轴突工作器，负责处理神经脉冲消息
+    
+    工作器从输入队列获取神经脉冲，进行处理，然后路由到下一个队列。
+    支持暂停、恢复和停止操作，以及错误处理和恢复机制。
     """
-    轴突工作器 - 传递神经信号的纤维工作器
-
-    继承自threading.Thread，持续消费队列中的神经脉冲并执行对应的Hook函数。
-    包含强制性的SINK校验逻辑，确保流程安全。
-    """
-
-    # 强制性安全队列
-    MANDATORY_QUEUES = {
-        'Q_AUDIT_INPUT',     # 输入审查
-        'Q_AUDIT_OUTPUT',    # 输出审查
-        'Q_RESPONSE_SINK'    # 响应发送器（SINK校验）
-    }
-
-    def __init__(
-        self,
-        name: str,
-        queue: SynapticQueue,
-        hook_function: Optional[Callable[[NeuralImpulse, str], NeuralImpulse]] = None,
-        router_instance: Optional[Any] = None,  # 回调到路由器
-        error_handler: Optional[Callable[[Exception, NeuralImpulse], None]] = None,
-        worker_id: Optional[int] = None
-    ):
-        """
-        初始化轴突工作器
-
+    
+    def __init__(self, 
+                 name: str,
+                 input_queue: SynapticQueue,
+                 hooks: Optional[List[BaseHook]] = None,
+                 router: Optional['NeuralSomaRouter'] = None,
+                 error_handler: Optional[Callable[[Exception, NeuralImpulse], None]] = None,
+                 worker_id: Optional[str] = None,
+                 max_consecutive_failures: int = 5,
+                 recovery_delay: float = 5.0,
+                 health_check_interval: float = 30.0,
+                 processing_timeout: float = 60.0):
+        """初始化轴突工作器
+        
         Args:
             name: 工作器名称
-            queue: 监听的突触队列
-            hook_function: 处理神经脉冲的钩子函数
-            router_instance: 路由器实例，用于路由消息
+            input_queue: 输入队列
+            hooks: 钩子函数列表
+            router: 路由器实例
             error_handler: 错误处理函数
-            worker_id: 工作器ID
+            worker_id: 工作器ID，如果不提供则自动生成
+            max_consecutive_failures: 最大连续失败次数，超过后进入恢复模式
+            recovery_delay: 恢复延迟时间（秒）
+            health_check_interval: 健康检查间隔（秒）
+            processing_timeout: 处理超时时间（秒）
         """
-        super().__init__(name=f"AxonWorker-{name}", daemon=True)
-        self.worker_name: str = name
-        self.worker_id: int = worker_id or id(self)
-        self.queue: SynapticQueue = queue
-        self.hook_function: Optional[Callable] = hook_function
-        self.router_instance = router_instance
-        self.error_handler: Optional[Callable] = error_handler
-
+        super().__init__(daemon=True)
+        self.name = name
+        self.worker_id = worker_id or str(uuid.uuid4())
+        self.input_queue = input_queue
+        self.hooks = hooks or []
+        self.router = router
+        self.error_handler = error_handler
+        
         # 工作器状态
-        self._running: bool = False
-        self._stopped: threading.Event = threading.Event()
+        self._state = WorkerState.INITIALIZING
+        self._stop_event = threading.Event()
         self._pause_event = threading.Event()
-        self._pause_event.set()  # 默认不暂停
-
+        self._pause_event.set()  # 初始状态为运行
+        
+        # 错误处理配置
+        self.max_consecutive_failures = max_consecutive_failures
+        self.recovery_delay = recovery_delay
+        self.health_check_interval = health_check_interval
+        self.processing_timeout = processing_timeout
+        
         # 统计信息
-        self._stats = {
-            'created_at': time.time(),
-            'started_at': None,
-            'processed_messages': 0,
-            'failed_messages': 0,
-            'last_activity': None,
-            'total_processing_time': 0.0
+        self._stats = WorkerStats(
+            worker_id=self.worker_id,
+            name=self.name,
+            state=self._state
+        )
+        
+        # 健康检查线程
+        self._health_check_thread = threading.Thread(
+            target=self._health_check_loop,
+            daemon=True
+        )
+        
+        # 错误类型映射
+        self._error_type_mapping = {
+            ValueError: ErrorType.VALIDATION_ERROR,
+            RuntimeError: ErrorType.PROCESSING_ERROR,
+            KeyError: ErrorType.ROUTING_ERROR,
+            Empty: ErrorType.QUEUE_ERROR,
+            AttributeError: ErrorType.HOOK_ERROR,
+            OSError: ErrorType.SYSTEM_ERROR,
+            TimeoutError: ErrorType.TIMEOUT_ERROR
         }
-
-        # 日志记录
-        self.logger = logging.getLogger(f"worker.{name}")
-
-    def run(self) -> None:
-        """主工作循环"""
-        self._running = True
-        self._stats['started_at'] = time.time()
-        self.logger.info(f"轴突工作器 {self.worker_name} 启动，监听队列: {self.queue.name}")
-
+    
+    def run(self):
+        """工作器主循环"""
+        self._state = WorkerState.RUNNING
+        self._stats.state = self._state
+        self._stats.start_time = time.time()
+        
+        # 启动健康检查线程
+        self._health_check_thread.start()
+        
         try:
-            while not self._stopped.is_set():
+            while not self._stop_event.is_set():
                 # 检查是否暂停
                 if not self._pause_event.is_set():
-                    self._pause_event.wait()
+                    time.sleep(0.1)
                     continue
-
-                # 获取神经脉冲（非阻塞）
-                impulse = self.queue.get(block=False)
-                if impulse is None:
-                    time.sleep(0.01)  # 避免CPU空转
-                    continue
-
-                # 处理神经脉冲
-                self._process_impulse(impulse)
-
-        except Exception as e:
-            self.logger.error(f"轴突工作器 {self.worker_name} 发生未捕获异常: {e}")
-            self.logger.error(f"异常详情: {traceback.format_exc()}")
+                
+                try:
+                    # 非阻塞获取神经脉冲
+                    impulse = self.input_queue.get(block=False)
+                    if impulse is None:
+                        time.sleep(0.1)
+                        continue
+                    
+                    # 处理神经脉冲
+                    self._process_impulse(impulse)
+                    
+                    # 重置连续失败计数
+                    self._stats.consecutive_failures = 0
+                    
+                except Empty:
+                    # 队列为空，短暂休眠
+                    time.sleep(0.1)
+                except Exception as e:
+                    # 处理异常
+                    self._handle_error(e, None)
+                    
+                    # 检查是否需要进入恢复模式
+                    if self._stats.consecutive_failures >= self.max_consecutive_failures:
+                        self._enter_recovery_mode()
+        
         finally:
-            self._running = False
-            self.logger.debug(f"轴突工作器 {self.worker_name} 停止")
-
-    def _process_impulse(self, impulse: NeuralImpulse) -> None:
-        """处理单个神经脉冲"""
+            self._state = WorkerState.STOPPED
+            self._stats.state = self._state
+    
+    def _process_impulse(self, impulse: NeuralImpulse):
+        """处理神经脉冲
+        
+        Args:
+            impulse: 神经脉冲对象
+        """
         start_time = time.time()
-
+        self._stats.last_activity = start_time
+        
         try:
-            # SINK安全校验（如果当前队列是Q_RESPONSE_SINK）
-            if self.queue.name == 'Q_RESPONSE_SINK':
-                self._validate_sink_security(impulse)
-
-            # 执行Hook函数
-            if self.hook_function:
-                processed_impulse = self.hook_function(impulse, self.queue.name)
-                if processed_impulse is None:
-                    # Hook返回None，丢弃消息
-                    self.logger.warning(f"Hook函数返回None，丢弃消息: {impulse.session_id}")
-                    self.queue.task_done()
-                    return
-            else:
-                processed_impulse = impulse
-
-            # 根据action_intent路由到下一个队列
-            if self.router_instance and processed_impulse.action_intent:
-                self._route_to_next_queue(processed_impulse)
-
-            # 标记任务完成
-            self.queue.task_done()
-
+            # 验证SINK安全
+            self._validate_sink_security(impulse)
+            
+            # 执行前置钩子
+            for hook in self.hooks:
+                hook.before_process(impulse)
+            
+            # 路由到下一个队列
+            self._route_to_next_queue(impulse)
+            
+            # 执行后置钩子
+            for hook in self.hooks:
+                hook.after_process(impulse)
+            
             # 更新统计信息
             processing_time = time.time() - start_time
-            with threading.RLock():
-                self._stats['processed_messages'] += 1
-                self._stats['last_activity'] = time.time()
-                self._stats['total_processing_time'] += processing_time
-
+            self._update_stats(processing_time, success=True)
+            
         except Exception as e:
-            # 错误处理
-            with threading.RLock():
-                self._stats['failed_messages'] += 1
-                self._stats['last_activity'] = time.time()
-
-            self.logger.error(f"处理神经脉冲失败: {e}")
-            self.logger.error(f"消息ID: {impulse.session_id}, 队列: {self.queue.name}")
-
-            # 调用自定义错误处理器
+            # 更新统计信息
+            processing_time = time.time() - start_time
+            self._update_stats(processing_time, success=False)
+            
+            # 处理错误
+            self._handle_error(e, impulse)
+            
+            # 如果有错误处理器，调用它
             if self.error_handler:
                 try:
                     self.error_handler(e, impulse)
                 except Exception as handler_error:
-                    self.logger.error(f"错误处理器也失败了: {handler_error}")
-
-            # 仍然标记任务完成，避免阻塞队列
-            self.queue.task_done()
-
-    def _validate_sink_security(self, impulse: NeuralImpulse) -> None:
+                    print(f"Error in error handler: {handler_error}")
+    
+    def _validate_sink_security(self, impulse: NeuralImpulse):
+        """验证SINK安全
+        
+        Args:
+            impulse: 神经脉冲对象
+            
+        Raises:
+            ValueError: 如果验证失败
         """
-        SINK安全校验逻辑 - 支持Q_AUDIT_INPUT和Q_AUDIT_OUTPUT双重来源
-
-        验证消息是否源自Q_AUDIT_OUTPUT或Q_AUDIT_INPUT（输入审查失败的情况），确保安全性。
+        # 检查来源是否为Q_AUDIT_INPUT、Q_AUDIT_OUTPUT或Q_PROCESS_INPUT
+        if impulse.action_intent not in ["Q_AUDIT_INPUT", "Q_AUDIT_OUTPUT", "Q_PROCESS_INPUT"]:
+            raise ValueError(f"Invalid action_intent: {impulse.action_intent}. Expected Q_AUDIT_INPUT, Q_AUDIT_OUTPUT or Q_PROCESS_INPUT")
+    
+    def _route_to_next_queue(self, impulse: NeuralImpulse):
+        """路由神经脉冲到下一个队列
+        
+        Args:
+            impulse: 神经脉冲对象
+            
+        Raises:
+            KeyError: 如果路由失败
         """
-        # 检查源Agent或路由历史，允许两种合法来源：
-        # 1. Q_AUDIT_OUTPUT - 正常的输出审查流程
-        # 2. Q_AUDIT_INPUT - 输入审查失败，直接跳转到回复流程
-        valid_audit_sources = {'Q_AUDIT_INPUT', 'Q_AUDIT_OUTPUT'}
-
-        # 检查源Agent是否为合法的审计来源
-        source_agent_valid = False
-        for valid_source in valid_audit_sources:
-            if (impulse.source_agent == valid_source or
-                impulse.source_agent.endswith(f"_{valid_source}")):
-                source_agent_valid = True
-                break
-
-        # 检查路由历史是否包含合法的审计队列
-        history_valid = False
-        for valid_source in valid_audit_sources:
-            if valid_source in impulse.routing_history:
-                history_valid = True
-                break
-
-        if not (source_agent_valid or history_valid):
-            error_msg = (f"流程违规：消息试图直接路由到Q_RESPONSE_SINK但未经过安全审查。"
-                        f"Source: {impulse.source_agent}, History: {impulse.routing_history}")
-
-            self.logger.error(error_msg)
-            raise ValueError(error_msg)
-
-        # 记录校验通过和来源
-        if 'audit_failed_at_input' in impulse.metadata:
-            self.logger.debug(f"SINK安全校验通过（输入审查失败）: {impulse.session_id}")
-        elif 'audit_failed_at_output' in impulse.metadata:
-            self.logger.debug(f"SINK安全校验通过（输出审查失败）: {impulse.session_id}")
+        if not self.router:
+            raise KeyError("No router configured")
+        
+        # 根据action_intent路由到不同的队列
+        action_intent = impulse.metadata.get("action_intent", "Q_AUDIT_OUTPUT")
+        
+        # 更新路由历史
+        impulse.add_to_history(self.name)
+        
+        # 路由到下一个队列
+        success = self.router._send_to_queue(action_intent, impulse)
+        if not success:
+            raise KeyError(f"Failed to route impulse with action_intent: {action_intent}")
+    
+    def _handle_error(self, error: Exception, impulse: Optional[NeuralImpulse] = None):
+        """处理错误
+        
+        Args:
+            error: 异常对象
+            impulse: 相关的神经脉冲对象（可选）
+        """
+        # 确定错误类型
+        error_type = self._determine_error_type(error)
+        
+        # 更新错误统计
+        error_type_str = error_type.value
+        self._stats.error_counts[error_type_str] = self._stats.error_counts.get(error_type_str, 0) + 1
+        self._stats.last_error = str(error)
+        self._stats.last_error_time = time.time()
+        self._stats.consecutive_failures += 1
+        
+        # 记录错误
+        print(f"Error in worker {self.name}: {error}")
+        if impulse:
+            print(f"Error processing impulse: {impulse.session_id}")
+    
+    def _determine_error_type(self, error: Exception) -> ErrorType:
+        """确定错误类型
+        
+        Args:
+            error: 异常对象
+            
+        Returns:
+            ErrorType: 错误类型
+        """
+        for error_class, error_type in self._error_type_mapping.items():
+            if isinstance(error, error_class):
+                return error_type
+        
+        # 默认为系统错误
+        return ErrorType.SYSTEM_ERROR
+    
+    def _enter_recovery_mode(self):
+        """进入恢复模式"""
+        self._state = WorkerState.RECOVERING
+        self._stats.state = self._state
+        self._stats.recovery_attempts += 1
+        
+        print(f"Worker {self.name} entering recovery mode after {self._stats.consecutive_failures} consecutive failures")
+        
+        # 等待恢复延迟
+        time.sleep(self.recovery_delay)
+        
+        # 重置连续失败计数
+        self._stats.consecutive_failures = 0
+        
+        # 恢复到运行状态
+        self._state = WorkerState.RUNNING
+        self._stats.state = self._state
+        
+        print(f"Worker {self.name} recovered and resuming operation")
+    
+    def _health_check_loop(self):
+        """健康检查循环"""
+        while not self._stop_event.is_set():
+            time.sleep(self.health_check_interval)
+            
+            # 计算健康分数
+            self._calculate_health_score()
+            
+            # 检查是否需要干预
+            if self._stats.health_score < 30.0:
+                print(f"Worker {self.name} health score is low: {self._stats.health_score}")
+    
+    def _calculate_health_score(self):
+        """计算健康分数"""
+        # 基础分数
+        score = 100.0
+        
+        # 根据成功率调整
+        if self._stats.processed_messages > 0:
+            success_rate = self._stats.success_rate
+            score *= (success_rate / 100.0)
+        
+        # 根据连续失败次数调整
+        if self._stats.consecutive_failures > 0:
+            score -= (self._stats.consecutive_failures * 10)
+        
+        # 根据恢复尝试次数调整
+        if self._stats.recovery_attempts > 0:
+            score -= (self._stats.recovery_attempts * 5)
+        
+        # 确保分数在0-100之间
+        self._stats.health_score = max(0.0, min(100.0, score))
+    
+    def _update_stats(self, processing_time: float, success: bool):
+        """更新统计信息
+        
+        Args:
+            processing_time: 处理时间
+            success: 是否成功
+        """
+        if success:
+            self._stats.processed_messages += 1
         else:
-            self.logger.debug(f"SINK安全校验通过（正常流程）: {impulse.session_id}")
-
-    def _route_to_next_queue(self, impulse: NeuralImpulse) -> None:
-        """将神经脉冲路由到下一个队列"""
-        if not self.router_instance:
-            self.logger.warning("无路由器实例，无法路由消息")
-            return
-
-        try:
-            # 处理特殊的action_intent映射
-            target_queue = impulse.action_intent
-
-            # 如果当前已经在Q_DONE队列且目标是Done，则无需再次路由
-            if (self.queue.name == 'Q_DONE' and target_queue == "Done"):
-                return
-
-            # 添加当前队列到路由历史，使用QUEUE:前缀区分队列名称和Agent名称
-            impulse.add_to_history(f"QUEUE:{self.queue.name}")
-
-            # Done action intent 映射到 Q_DONE 队列
-            if target_queue == "Done":
-                target_queue = "Q_DONE"
-
-            # 调用路由器的发送方法
-            self.router_instance._send_to_queue(target_queue, impulse)
-
-        except Exception as e:
-            self.logger.error(f"路由消息失败: {e}")
-            raise
-
-    def stop(self) -> None:
-        """停止工作器"""
-        self.logger.debug(f"停止轴突工作器 {self.worker_name}")
-        self._stopped.set()
-
-        # 如果工作器正在暂停状态，唤醒它以便退出
-        self._pause_event.set()
-
-    def pause(self) -> None:
+            self._stats.failed_messages += 1
+        
+        self._stats.total_processing_time += processing_time
+        total_messages = self._stats.processed_messages + self._stats.failed_messages
+        
+        if total_messages > 0:
+            self._stats.average_processing_time = self._stats.total_processing_time / total_messages
+            self._stats.success_rate = (self._stats.processed_messages / total_messages) * 100
+        
+        # 更新运行时间
+        self._stats.uptime = time.time() - self._stats.start_time
+    
+    def pause(self):
         """暂停工作器"""
-        self.logger.debug(f"暂停轴突工作器 {self.worker_name}")
         self._pause_event.clear()
-
-    def resume(self) -> None:
+        self._state = WorkerState.PAUSED
+        self._stats.state = self._state
+        print(f"Worker {self.name} paused")
+    
+    def resume(self):
         """恢复工作器"""
-        self.logger.debug(f"恢复轴突工作器 {self.worker_name}")
         self._pause_event.set()
-
-    def is_running(self) -> bool:
-        """检查工作器是否运行中"""
-        return self._running
-
-    def is_paused(self) -> bool:
-        """检查工作器是否暂停"""
-        return not self._pause_event.is_set()
-
-    def get_stats(self) -> Dict[str, Any]:
-        """获取工作器统计信息"""
-        with threading.RLock():
-            uptime = time.time() - self._stats['created_at']
-            runtime = time.time() - self._stats['started_at'] if self._stats['started_at'] else 0
-
-            return {
-                **self._stats,
-                'worker_name': self.worker_name,
-                'worker_id': self.worker_id,
-                'queue_name': self.queue.name,
-                'is_running': self._running,
-                'is_paused': self.is_paused(),
-                'uptime_seconds': uptime,
-                'runtime_seconds': runtime,
-                'avg_processing_time': (
-                    self._stats['total_processing_time'] / max(1, self._stats['processed_messages'])
-                ),
-                'success_rate': (
-                    (self._stats['processed_messages'] - self._stats['failed_messages']) /
-                    max(1, self._stats['processed_messages'])
-                ) if self._stats['processed_messages'] > 0 else 0.0
-            }
-
+        self._state = WorkerState.RUNNING
+        self._stats.state = self._state
+        print(f"Worker {self.name} resumed")
+    
+    def stop(self):
+        """停止工作器"""
+        self._state = WorkerState.STOPPING
+        self._stats.state = self._state
+        self._stop_event.set()
+        print(f"Worker {self.name} stopping")
+    
+    def get_stats(self) -> WorkerStats:
+        """获取工作器统计信息
+        
+        Returns:
+            WorkerStats: 工作器统计信息
+        """
+        # 更新运行时间
+        self._stats.uptime = time.time() - self._stats.start_time
+        
+        # 更新状态
+        self._stats.state = self._state
+        
+        return self._stats
+    
+    def get_state(self) -> WorkerState:
+        """获取工作器状态
+        
+        Returns:
+            WorkerState: 工作器状态
+        """
+        return self._state
+    
+    def is_healthy(self) -> bool:
+        """检查工作器是否健康
+        
+        Returns:
+            bool: 是否健康
+        """
+        return self._stats.health_score >= 50.0
+    
     def __str__(self) -> str:
-        """字符串表示"""
-        status = "运行中" if self._running else "已停止"
-        return f"AxonWorker(name='{self.worker_name}', queue='{self.queue.name}', status={status})"
-
+        """返回工作器的字符串表示
+        
+        Returns:
+            str: 工作器字符串表示
+        """
+        return f"AxonWorker(name={self.name}, state={self._state.value}, processed={self._stats.processed_messages})"
+    
     def __repr__(self) -> str:
-        """详细字符串表示"""
-        return (f"AxonWorker(name='{self.worker_name}', worker_id={self.worker_id}, "
-                f"queue='{self.queue.name}', running={self._running})")
+        """返回工作器的详细字符串表示
+        
+        Returns:
+            str: 工作器详细字符串表示
+        """
+        return (f"AxonWorker(id={self.worker_id}, name={self.name}, state={self._state.value}, "
+                f"processed={self._stats.processed_messages}, failed={self._stats.failed_messages}, "
+                f"success_rate={self._stats.success_rate:.2f}%, health_score={self._stats.health_score:.2f})")

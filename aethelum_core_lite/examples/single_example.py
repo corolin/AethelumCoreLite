@@ -15,11 +15,11 @@ import logging
 from threading import Event
 
 # 添加项目根目录到Python路径
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
 from aethelum_core_lite import NeuralSomaRouter, NeuralImpulse
-from aethelum_core_lite.agents.audit_agent import AuditAgent
-from aethelum_core_lite.core.zhipu_client import ZhipuClientManager
+from aethelum_core_lite.examples.agents.audit_agent import AuditAgent
+from aethelum_core_lite.examples.zhipu_client import ZhipuClientManager
 
 
 def setup_logging():
@@ -138,11 +138,11 @@ def main():
     try:
         # 1. 获取配置并创建路由器
         try:
-            from aethelum_core_lite.examples.config import OPENAI_CONFIG
+            from aethelum_core_lite.examples.config import ZHIPU_CONFIG
 
             # 一键创建完整的神经系统（路由器会自动管理所有组件）
-            router = NeuralSomaRouter(openai_config=OPENAI_CONFIG)
-            logger.info(f"神经路由器创建完成 - 模型: {OPENAI_CONFIG.model}")
+            router = NeuralSomaRouter()
+            logger.info("神经路由器创建完成 - 使用智谱AI客户端")
         except Exception as e:
             logger.error(f"路由器初始化失败: {e} - 请检查配置文件")
             return

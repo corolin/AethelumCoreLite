@@ -233,12 +233,12 @@ class ZhipuClientManager:
         return self.get_client()
 
     @classmethod
-    def create_from_openai_config(cls, openai_config) -> 'ZhipuClientManager':
+    def create_from_config(cls, config) -> 'ZhipuClientManager':
         """
-        从OpenAI配置创建智谱AI客户端管理器
+        从配置创建智谱AI客户端管理器
 
         Args:
-            openai_config: OpenAI配置对象
+            config: 配置对象（支持ZhipuConfig或OpenAIConfig兼容格式）
 
         Returns:
             ZhipuClientManager: 智谱AI客户端管理器
@@ -247,13 +247,13 @@ class ZhipuClientManager:
 
         # 创建智谱AI配置
         zhipu_config = ZhipuConfig(
-            api_key=getattr(openai_config, 'api_key', ''),
-            model=getattr(openai_config, 'model', 'glm-4.5-flash'),
-            audit_model=getattr(openai_config, 'audit_model', 'glm-4.5-flash'),
-            audit_temperature=getattr(openai_config, 'audit_temperature', 0.0),
-            audit_max_tokens=getattr(openai_config, 'audit_max_tokens', 1000),
-            timeout=getattr(openai_config, 'timeout', 120),
-            thinking_type=getattr(openai_config, 'thinking_type', 'disabled')
+            api_key=getattr(config, 'api_key', ''),
+            model=getattr(config, 'model', 'glm-4.5-flash'),
+            audit_model=getattr(config, 'audit_model', 'glm-4.5-flash'),
+            audit_temperature=getattr(config, 'audit_temperature', 0.0),
+            audit_max_tokens=getattr(config, 'audit_max_tokens', 1000),
+            timeout=getattr(config, 'timeout', 120),
+            thinking_type=getattr(config, 'thinking_type', 'disabled')
         )
 
         # 添加客户端

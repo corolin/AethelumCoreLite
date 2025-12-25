@@ -5,9 +5,10 @@
 ## 特性
 
 - 🧠 **树神经架构**: 基于生物树神经概念的通信框架
-- 🔍 **内容安全审查**: 集成完整的审查和反注入系统
-- 📦 **ProtoBuf强制**: 高效消息序列化（强制依赖）
+- 🤖 **智谱AI集成**: 默认集成智谱AI客户端，支持深度思考模式
+- 📦 **ProtoBuf支持**: 高效消息序列化（可选依赖）
 - ⚡ **线程安全**: 多线程环境下的安全通信
+- 🔍 **可选审核**: 提供内容安全审查示例（非强制流程）
 
 ## 安装
 
@@ -28,9 +29,9 @@ pip install -e ".[dev]"
 pip install -e ".[dev,docs]"
 ```
 
-### ProtoBuf 编译要求
+### ProtoBuf 编译要求（可选）
 
-**重要**: ProtoBuf是强制性依赖，必须编译schema文件才能运行：
+ProtoBuf是可选依赖，仅在需要使用ProtoBuf序列化功能时才需要编译：
 
 ```bash
 # 安装protoc编译器
@@ -43,7 +44,7 @@ brew install protobuf
 # Windows:
 # 下载并安装 protoc: https://github.com/protocolbuffers/protobuf/releases
 
-# 编译schema文件
+# 编译schema文件（仅在需要ProtoBuf功能时）
 cd aethelum_core_lite/core
 protoc --python_out=. protobuf_schema.proto
 ```
@@ -64,16 +65,16 @@ protoc --python_out=. protobuf_schema.proto
 主控制器，管理队列和工作器：
 ```python
 from aethelum_core_lite import NeuralSomaRouter
-from aethelum_core_lite.core.openai_client import OpenAIConfig
+from aethelum_core_lite.core.zhipu_client import ZhipuConfig
 
-# 创建配置
-config = OpenAIConfig(
-    api_key="your-api-key",
-    model="gpt-3.5-turbo"
+# 创建智谱AI配置（默认推荐）
+config = ZhipuConfig(
+    api_key="your-zhipu-api-key",
+    model="glm-4.5-flash"
 )
 
 # 一键创建完整的神经系统
-router = NeuralSomaRouter(openai_config=config)
+router = NeuralSomaRouter()
 router.auto_setup()
 ```
 
@@ -98,21 +99,21 @@ router.auto_setup(
 )
 ```
 
-#### AuditAgent (审计Agent)
-内容安全审查
+#### AuditAgent (审计Agent) - 可选示例
+内容安全审查（作为示例提供，非强制流程）
 ```python
-from aethelum_core_lite.agents import AuditAgent
-from aethelum_core_lite.core.openai_client import OpenAICompatClient, OpenAIConfig
+from aethelum_core_lite.examples.agents import AuditAgent
+from aethelum_core_lite.core.zhipu_client import ZhipuConfig, ZhipuSDKClient
 
-# 配置OpenAI客户端
-config = OpenAIConfig(
-    api_key="your-api-key",
-    model="gpt-3.5-turbo"
+# 配置智谱AI客户端
+config = ZhipuConfig(
+    api_key="your-zhipu-api-key",
+    model="glm-4.5-flash"
 )
-openai_client = OpenAICompatClient(config)
+zhipu_client = ZhipuSDKClient(config)
 
-# 创建审计Agent
-audit_agent = AuditAgent("SecurityAgent", openai_client)
+# 创建审计Agent（示例用途）
+audit_agent = AuditAgent("SecurityAgent", zhipu_client)
 ```
 
 ## 快速开始
@@ -128,25 +129,25 @@ python -m aethelum_core_lite.examples.main
 
 示例程序提供：
 - 📋 交互式菜单选择不同示例
-- 🔍 内容安全审查基础示例
+- 🔍 内容安全审查示例（可选）
 - 🚀 高级多线程功能演示
-- 📦 ProtoBuf集成完整示例
+- 📦 ProtoBuf集成示例（可选）
 - 📊 配置状态检查
 
 ### 基础使用示例
 
 ```python
 from aethelum_core_lite import NeuralSomaRouter, NeuralImpulse
-from aethelum_core_lite.core.openai_client import OpenAIConfig, OpenAICompatClient
+from aethelum_core_lite.core.zhipu_client import ZhipuConfig
 
-# 1. 配置OpenAI客户端
-config = OpenAIConfig(
-    api_key="your-openai-api-key",
-    model="gpt-3.5-turbo"
+# 1. 配置智谱AI客户端（推荐）
+config = ZhipuConfig(
+    api_key="your-zhipu-api-key",
+    model="glm-4.5-flash"
 )
 
 # 2. 创建路由器并一键设置
-router = NeuralSomaRouter(openai_config=config)
+router = NeuralSomaRouter()
 
 # 3. 定义业务处理函数
 def business_handler(impulse, source_queue):
@@ -154,7 +155,7 @@ def business_handler(impulse, source_queue):
     response = f"处理了您的请求: {impulse.get_text_content()}"
     impulse.set_text_content(response)
     impulse.update_source("BusinessAgent")
-    impulse.reroute_to("Q_AUDIT_OUTPUT")
+    impulse.reroute_to("Q_RESPONSE_SINK")  # 直接路由到响应
     return impulse
 
 # 4. 一键自动设置整个神经系统
@@ -163,46 +164,47 @@ router.auto_setup(
     response_handler=None  # 可选
 )
 
-# 5. 发送消息进行审计
+# 5. 发送消息
 impulse = NeuralImpulse(
     content="你好，请帮我解答问题",
-    action_intent="Q_AUDIT_INPUT"
+    action_intent="Q_PROCESS_INPUT"  # 使用标准输入队列
 )
 router.inject_input(impulse)
 ```
 
 ## 配置
 
-### OpenAI配置
+### 智谱AI配置（推荐）
 ```python
-from aethelum_core_lite.core.openai_client import OpenAIConfig, OpenAICompatClient
+from aethelum_core_lite.core.zhipu_client import ZhipuConfig, ZhipuSDKClient
 
-config = OpenAIConfig(
-    api_key="your-api-key",
-    base_url="https://api.openai.com/v1",
-    model="gpt-3.5-turbo",
-    audit_model="gpt-3.5-turbo",
+config = ZhipuConfig(
+    api_key="your-zhipu-api-key",
+    model="glm-4.5-flash",
+    audit_model="glm-4.5-flash",
     audit_temperature=0.0,
-    audit_max_tokens=150
+    audit_max_tokens=1000,
+    thinking_type="disabled"  # 可选："enabled" 启用深度思考模式
 )
 
-client = OpenAICompatClient(config)
+client = ZhipuSDKClient(config)
 ```
 
-### 审计Agent配置
+### 审计Agent配置（示例）
 ```python
+# 审计流程作为示例提供，非强制使用
 audit_agent = AuditAgent(
     agent_name="CustomAuditAgent",
-    openai_client=client
+    client=client  # 支持智谱AI或OpenAI兼容客户端
 )
 ```
 
 ## 安全特性
 
-- **强制审查**: 所有输入输出必须经过内容安全审查
-- **ProtoBuf加密**: 支持消息加密传输
-- **双重验证**: 多层次的安全验证机制
-- **AI驱动**: 基于AI的智能内容识别
+- **可选审核**: 提供内容安全审查示例，可根据需要启用
+- **ProtoBuf支持**: 可选的消息序列化和加密传输
+- **灵活架构**: 支持自定义安全验证机制
+- **AI驱动**: 基于智谱AI的智能内容处理
 
 ## 开发
 

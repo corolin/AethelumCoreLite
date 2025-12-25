@@ -1,13 +1,13 @@
 """
 Aethelum Core Lite 示例程序主入口
 
-提供统一的示例程序运行界面，包括OpenAI客户端配置和多个示例选择。
+提供统一的示例程序运行界面，包括AI客户端配置和多个示例选择。
 
 使用方法:
     python -m aethelum_core_lite.examples.main
 
 功能特性:
-- OpenAI客户端配置
+- AI客户端配置（支持智谱AI和OpenAI）
 - 多示例菜单选择
 - 配置验证和错误处理
 - 优雅的退出机制
@@ -24,9 +24,10 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 # 延迟导入，避免在依赖检查阶段触发模块导入
 def import_dependencies():
     """延迟导入依赖项"""
-    from aethelum_core_lite.core.openai_client import OpenAICompatClient, OpenAIConfig
-    from aethelum_core_lite.agents.audit_agent import AuditAgent
-    return OpenAICompatClient, OpenAIConfig, AuditAgent
+    # from aethelum_core_lite.core.openai_client import OpenAICompatClient, OpenAIConfig  # 已移除OpenAI依赖
+    from aethelum_core_lite.examples.zhipu_client import ZhipuSDKClient, ZhipuConfig
+    from aethelum_core_lite.examples.agents.audit_agent import AuditAgent
+    return OpenAICompatClient, OpenAIConfig, ZhipuSDKClient, ZhipuConfig, AuditAgent
 
 
 def setup_logging():
@@ -65,97 +66,115 @@ def print_menu():
     print("   - 并发安全审查、智能违规识别、自动拒绝回复")
     print()
     print("🔹 系统管理:")
-    print("5. ⚙️  重新配置OpenAI客户端")
+    print("5. ⚙️  重新配置AI客户端")
     print("6. 📊 查看当前配置")
     print()
     print("q. 🚪 退出程序")
     print()
     print("-" * 60)
-    print("💡 所有示例都需要OpenAI客户端配置")
+    print("💡 所有示例都需要AI客户端配置（推荐使用智谱AI）")
 
 
 class ExampleManager:
     """示例程序管理器"""
 
     def __init__(self):
-        self.openai_client = None  # 延迟初始化，避免导入错误
+        self.ai_client = None  # 延迟初始化，避免导入错误
+        self.ai_client_type = None  # 记录客户端类型
         self.logger = logging.getLogger(__name__)
 
-    def get_openai_config(self):
-        """获取OpenAI配置"""
+    def get_ai_config(self):
+        """获取AI配置（优先使用智谱AI）"""
         # 延迟导入避免在依赖检查阶段触发错误
-        OpenAICompatClient, OpenAIConfig, _ = import_dependencies()
+        OpenAICompatClient, OpenAIConfig, ZhipuSDKClient, ZhipuConfig, _ = import_dependencies()
 
-        # 方法1: 尝试从配置文件加载
+        # 方法1: 尝试从配置文件加载（优先智谱AI）
         try:
-            from .config import OPENAI_CONFIG
-            return OPENAI_CONFIG
+            from .config import ZHIPU_CONFIG, OPENAI_CONFIG
+            if ZHIPU_CONFIG and ZHIPU_CONFIG.api_key.strip():
+                self.ai_client_type = "zhipu"
+                return ZHIPU_CONFIG
+            elif OPENAI_CONFIG and OPENAI_CONFIG.api_key.strip():
+                self.ai_client_type = "openai"
+                return OPENAI_CONFIG
         except ImportError:
             pass
 
         # 方法2: 使用硬编码配置（用户需要修改）
-        return OpenAIConfig(
-            api_key="",  # ⚠️ 请在此处填写您的OpenAI API密钥
-            base_url="https://api.openai.com/v1",
-            model="gpt-3.5-turbo",
-            audit_model="gpt-3.5-turbo",
+        print("⚠️  未找到有效的AI配置，使用默认智谱AI配置")
+        self.ai_client_type = "zhipu"
+        return ZhipuConfig(
+            api_key="",  # ⚠️ 请在此处填写您的智谱AI API密钥
+            model="glm-4.5-flash",
+            audit_model="glm-4.5-flash",
             audit_temperature=0.0,
-            audit_max_tokens=150
+            audit_max_tokens=1000,
+            timeout=120,
+            thinking_type="disabled"
         )
 
-    def configure_openai_client(self) -> bool:
-        """配置OpenAI客户端（保留此方法以向后兼容）"""
-        print("\n⚙️  OpenAI客户端配置")
+    def configure_ai_client(self) -> bool:
+        """配置AI客户端（支持智谱AI和OpenAI）"""
+        print("\n⚙️  AI客户端配置")
         print("-" * 30)
 
         # 获取配置
-        config = self.get_openai_config()
+        config = self.get_ai_config()
 
         # 检查API密钥是否已配置
         if not config.api_key.strip():
-            print("❌ 检测到OpenAI API密钥未配置！")
+            client_type = "智谱AI" if self.ai_client_type == "zhipu" else "OpenAI"
+            print(f"❌ 检测到{client_type} API密钥未配置！")
             print("\n📝 请按以下步骤配置：")
-            print("1. 编辑文件: aethelum_core_lite/examples/main.py")
-            print("2. 找到 api_key=\"\" 这一行")
-            print("3. 在引号内填写您的OpenAI API密钥")
-            print("   例如: api_key=\"sk-xxxxxxxxxxxxxxxxxxxxxxxx\"")
-            print("\n💡 获取API密钥: https://platform.openai.com/api-keys")
+            print("1. 编辑文件: aethelum_core_lite/examples/config.py")
+            print("2. 在 api_key=\"\" 这一行填写您的API密钥")
+            if self.ai_client_type == "zhipu":
+                print("3. 获取智谱AI API密钥: https://open.bigmodel.cn/")
+            else:
+                print("3. 获取OpenAI API密钥: https://platform.openai.com/api-keys")
             print("\n🔄 配置完成后请重新运行程序")
             input("\n按回车键继续...")
             return False
 
         try:
-            print("\n🔧 正在创建OpenAI客户端...")
+            client_type = "智谱AI" if self.ai_client_type == "zhipu" else "OpenAI"
+            print(f"\n🔧 正在创建{client_type}客户端...")
             print(f"   - API Key: {config.api_key[:10]}...{config.api_key[-4:]}")
-            print(f"   - Base URL: {config.base_url}")
+            if hasattr(config, 'base_url'):
+                print(f"   - Base URL: {config.base_url}")
             print(f"   - 模型: {config.model}")
             print(f"   - 审查模型: {config.audit_model}")
 
-            # 创建客户端
-            self.openai_client = OpenAICompatClient(config)
+            # 根据类型创建客户端
+            if self.ai_client_type == "zhipu":
+                self.ai_client = ZhipuSDKClient(config)
+            else:
+                self.ai_client = OpenAICompatClient(config)
 
-            print("✅ OpenAI客户端配置成功！")
+            print(f"✅ {client_type}客户端配置成功！")
 
             # 测试连接
             print("\n🔄 正在测试连接...")
-            if self.openai_client.is_healthy():
-                print("✅ OpenAI连接测试成功！")
+            if self.ai_client.is_healthy():
+                print(f"✅ {client_type}连接测试成功！")
                 return True
             else:
-                print("⚠️  OpenAI连接测试失败，但客户端已创建")
+                print(f"⚠️  {client_type}连接测试失败，但客户端已创建")
                 return True
 
         except Exception as e:
-            print(f"❌ OpenAI客户端配置失败: {e}")
-            self.openai_client = None
+            client_type = "智谱AI" if self.ai_client_type == "zhipu" else "OpenAI"
+            print(f"❌ {client_type}客户端配置失败: {e}")
+            self.ai_client = None
             return False
 
     def check_dependencies(self) -> dict:
         """检查依赖状态"""
         status = {
             "openai": False,
+            "zhipu": False,
             "protobuf": False,
-            "openai_client": False
+            "ai_client": False
         }
 
         # 检查OpenAI库
@@ -165,6 +184,13 @@ class ExampleManager:
         except ImportError:
             status["openai"] = False
 
+        # 检查智谱AI库
+        try:
+            from zai import ZhipuAiClient
+            status["zhipu"] = True
+        except ImportError:
+            status["zhipu"] = False
+
         # 检查ProtoBuf
         try:
             from aethelum_core_lite.core.protobuf_utils import ProtoBufManager
@@ -172,8 +198,8 @@ class ExampleManager:
         except ImportError:
             status["protobuf"] = False
 
-        # 检查OpenAI客户端
-        status["openai_client"] = self.openai_client is not None and self.openai_client.is_available
+        # 检查AI客户端
+        status["ai_client"] = self.ai_client is not None and self.ai_client.is_available
 
         return status
 
@@ -187,18 +213,22 @@ class ExampleManager:
         # OpenAI库状态
         print(f"OpenAI库: {'✅ 已安装' if status['openai'] else '❌ 未安装'}")
 
+        # 智谱AI库状态
+        print(f"智谱AI库: {'✅ 已安装' if status['zhipu'] else '❌ 未安装'}")
+
         # ProtoBuf状态
         print(f"ProtoBuf: {'✅ 可用' if status['protobuf'] else '❌ 不可用'}")
 
-        # OpenAI客户端状态
-        if status["openai_client"]:
-            print("OpenAI客户端: ✅ 已配置且可用")
-            if self.openai_client:
-                print(f"   - Base URL: {self.openai_client.config.base_url}")
-                print(f"   - 模型: {self.openai_client.config.model}")
-                print(f"   - 审查模型: {self.openai_client.config.audit_model}")
+        # AI客户端状态
+        if status["ai_client"]:
+            client_type = "智谱AI" if self.ai_client_type == "zhipu" else "OpenAI"
+            print(f"AI客户端: ✅ {client_type}已配置且可用")
+            if self.ai_client:
+                print(f"   - 类型: {client_type}")
+                print(f"   - 模型: {self.ai_client.config.model}")
+                print(f"   - 审查模型: {self.ai_client.config.audit_model}")
         else:
-            print("OpenAI客户端: ❌ 未配置或不可用")
+            print("AI客户端: ❌ 未配置或不可用")
 
         print()
 
@@ -207,10 +237,10 @@ class ExampleManager:
         print("\n⚡ 启动单消息基础示例")
         print("=" * 50)
 
-        # 检查OpenAI客户端
-        if not self.openai_client or not self.openai_client.is_available:
-            print("❌ 单消息示例需要配置OpenAI客户端！")
-            print("   请先选择选项5配置OpenAI客户端")
+        # 检查AI客户端
+        if not self.ai_client or not self.ai_client.is_available:
+            print("❌ 单消息示例需要配置AI客户端！")
+            print("   请先选择选项5配置AI客户端")
             input("\n按回车键继续...")
             return
 
@@ -226,10 +256,10 @@ class ExampleManager:
         print("\n🚀 启动多线程基础示例")
         print("=" * 50)
 
-        # 检查OpenAI客户端
-        if not self.openai_client or not self.openai_client.is_available:
-            print("❌ 多线程基础示例需要配置OpenAI客户端！")
-            print("   请先选择选项5配置OpenAI客户端")
+        # 检查AI客户端
+        if not self.ai_client or not self.ai_client.is_available:
+            print("❌ 多线程基础示例需要配置AI客户端！")
+            print("   请先选择选项5配置AI客户端")
             input("\n按回车键继续...")
             return
 
@@ -245,10 +275,10 @@ class ExampleManager:
         print("\n✨ 启动高级功能示例")
         print("=" * 50)
 
-        # 检查OpenAI客户端
-        if not self.openai_client or not self.openai_client.is_available:
-            print("❌ 高级功能示例需要配置OpenAI客户端！")
-            print("   请先选择选项5配置OpenAI客户端")
+        # 检查AI客户端
+        if not self.ai_client or not self.ai_client.is_available:
+            print("❌ 高级功能示例需要配置AI客户端！")
+            print("   请先选择选项5配置AI客户端")
             input("\n按回车键继续...")
             return
 
@@ -264,10 +294,10 @@ class ExampleManager:
         print("\n🛡️ 启动内容安全审查示例")
         print("=" * 50)
 
-        # 检查OpenAI客户端
-        if not self.openai_client or not self.openai_client.is_available:
-            print("❌ 内容安全审查示例需要配置OpenAI客户端！")
-            print("   请先选择选项5配置OpenAI客户端")
+        # 检查AI客户端
+        if not self.ai_client or not self.ai_client.is_available:
+            print("❌ 内容安全审查示例需要配置AI客户端！")
+            print("   请先选择选项5配置AI客户端")
             input("\n按回车键继续...")
             return
 
@@ -321,9 +351,18 @@ class ExampleManager:
             return
         print()
 
-        # 检查OpenAI库状态
-        print("🔍 检查OpenAI库状态...")
+        # 检查AI库状态
+        print("🔍 检查AI库状态...")
+        zhipu_available = False
         openai_available = False
+        
+        try:
+            from zai import ZhipuAiClient
+            print("✅ 智谱AI库已安装")
+            zhipu_available = True
+        except ImportError:
+            print("❌ 智谱AI库未安装")
+            
         try:
             import openai
             print("✅ OpenAI库已安装")
@@ -331,46 +370,53 @@ class ExampleManager:
         except ImportError:
             print("❌ OpenAI库未安装")
 
-        # 如果OpenAI库不可用，退出程序
-        if not openai_available:
-            print("\n❌ OpenAI是Aethelum Core Lite的强制性依赖！")
-            print("\n📝 请安装OpenAI库：pip install openai")
+        # 如果至少有一个AI库可用，继续
+        if not (zhipu_available or openai_available):
+            print("\n❌ 需要至少安装一个AI客户端库！")
+            print("\n📝 请安装以下库之一：")
+            print("1. 智谱AI库（推荐）: pip install zai-sdk")
+            print("2. OpenAI库: pip install openai")
             print("💡 安装完成后请重新运行程序")
             return
         print()
 
-        print("\n🔍 检测OpenAI客户端配置...")
+        print("\n🔍 检测AI客户端配置...")
 
         # 尝试自动加载配置
         try:
-            config = self.get_openai_config()
+            config = self.get_ai_config()
             if not config.api_key.strip():
-                print("\n❌ 检测到OpenAI API密钥未配置！")
-                print("\n📝 请先配置OpenAI客户端后运行程序：")
-                print("\n🔧 配置方法（任选其一）：")
-                print("1. 使用配置文件（推荐）:")
-                print("   复制 config_template.py 为 config.py")
-                print("   在 config.py 中填写您的API密钥")
-                print("\n2. 直接编辑代码:")
-                print("   编辑 aethelum_core_lite/examples/main.py")
-                print("   修改 api_key=\"\" 这一行")
-                print("\n💡 获取API密钥: https://platform.openai.com/api-keys")
+                client_type = "智谱AI" if self.ai_client_type == "zhipu" else "OpenAI"
+                print(f"\n❌ 检测到{client_type} API密钥未配置！")
+                print("\n📝 请先配置AI客户端后运行程序：")
+                print("\n🔧 配置方法（推荐）：")
+                print("1. 复制 config_template.py 为 config.py")
+                print("2. 在 config.py 中填写您的API密钥")
+                if self.ai_client_type == "zhipu":
+                    print("\n💡 获取智谱AI API密钥: https://open.bigmodel.cn/")
+                else:
+                    print("\n💡 获取OpenAI API密钥: https://platform.openai.com/api-keys")
                 print("\n🔄 配置完成后请重新运行程序")
                 return
 
             # 尝试创建客户端
-            print("🔧 正在初始化OpenAI客户端...")
-            self.openai_client = OpenAICompatClient(config)
+            client_type = "智谱AI" if self.ai_client_type == "zhipu" else "OpenAI"
+            print(f"🔧 正在初始化{client_type}客户端...")
+            
+            if self.ai_client_type == "zhipu":
+                self.ai_client = ZhipuSDKClient(config)
+            else:
+                self.ai_client = OpenAICompatClient(config)
 
             # 测试客户端健康状态
             print("🔄 测试连接...")
-            if self.openai_client.is_healthy():
-                print("✅ OpenAI客户端配置成功并可用！")
+            if self.ai_client.is_healthy():
+                print(f"✅ {client_type}客户端配置成功并可用！")
             else:
-                print("⚠️  OpenAI客户端已创建但连接测试失败")
+                print(f"⚠️  {client_type}客户端已创建但连接测试失败")
 
         except Exception as e:
-            print(f"❌ OpenAI客户端初始化失败: {e}")
+            print(f"❌ AI客户端初始化失败: {e}")
             print("\n请检查配置是否正确后重新运行程序")
             return
 
@@ -393,7 +439,7 @@ class ExampleManager:
             elif choice == '4':
                 self.run_moral_audit_example()
             elif choice == '5':
-                self.reconfigure_openai_client()
+                self.reconfigure_ai_client()
             elif choice == '6':
                 self.show_status()
             elif choice == 'q':
@@ -405,13 +451,13 @@ class ExampleManager:
             if choice != 'q':
                 input("\n按回车键返回主菜单...")
 
-    def reconfigure_openai_client(self):
-        """重新配置OpenAI客户端（用于菜单选项4）"""
-        print("\n⚙️  重新配置OpenAI客户端")
+    def reconfigure_ai_client(self):
+        """重新配置AI客户端（用于菜单选项5）"""
+        print("\n⚙️  重新配置AI客户端")
         print("-" * 30)
 
         # 重新加载配置
-        config = self.get_openai_config()
+        config = self.get_ai_config()
 
         if not config.api_key.strip():
             print("❌ API密钥未配置，请先按上述步骤配置！")
@@ -419,25 +465,31 @@ class ExampleManager:
             return
 
         try:
-            print("\n🔧 重新创建OpenAI客户端...")
-            self.openai_client = OpenAICompatClient(config)
+            client_type = "智谱AI" if self.ai_client_type == "zhipu" else "OpenAI"
+            print(f"\n🔧 重新创建{client_type}客户端...")
+            
+            if self.ai_client_type == "zhipu":
+                self.ai_client = ZhipuSDKClient(config)
+            else:
+                self.ai_client = OpenAICompatClient(config)
 
-            print("✅ OpenAI客户端重新配置成功！")
+            print(f"✅ {client_type}客户端重新配置成功！")
             print(f"   - API Key: {config.api_key[:10]}...{config.api_key[-4:]}")
-            print(f"   - Base URL: {config.base_url}")
+            if hasattr(config, 'base_url'):
+                print(f"   - Base URL: {config.base_url}")
             print(f"   - 模型: {config.model}")
             print(f"   - 审查模型: {config.audit_model}")
 
             # 测试连接
             print("\n🔄 测试连接...")
-            if self.openai_client.is_healthy():
-                print("✅ OpenAI连接测试成功！")
+            if self.ai_client.is_healthy():
+                print(f"✅ {client_type}连接测试成功！")
             else:
-                print("⚠️  OpenAI连接测试失败，但客户端已创建")
+                print(f"⚠️  {client_type}连接测试失败，但客户端已创建")
 
         except Exception as e:
             print(f"❌ 重新配置失败: {e}")
-            self.openai_client = None
+            self.ai_client = None
 
         input("\n按回车键继续...")
 

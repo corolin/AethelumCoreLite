@@ -8,9 +8,9 @@ import json
 import logging
 import random
 from typing import Dict, List, Any, Optional
-from ..core.message import NeuralImpulse
-from ..core.protobuf_utils import ProtoBufManager
-from ..prompts.moral_audit_prompts import MoralAuditPrompts
+from ...core.message import NeuralImpulse
+from ...core.protobuf_utils import ProtoBufManager
+from ...prompts.moral_audit_prompts import MoralAuditPrompts
 
 
 class Violation:
@@ -77,20 +77,20 @@ class AuditAgent:
     同时处理输入和输出两个强制性关卡。
     """
 
-    def __init__(self, agent_name: str = "AuditAgent", openai_client: Optional[Any] = None):
+    def __init__(self, agent_name: str = "AuditAgent", ai_client: Optional[Any] = None):
         """
         初始化审计Agent
 
         Args:
             agent_name: Agent名称
-            openai_client: OpenAI客户端实例
+            ai_client: AI客户端实例（支持OpenAI或智谱AI客户端）
         """
         self.agent_name = agent_name
         self.logger = logging.getLogger(f"audit.{agent_name}")
-        self.openai_client = openai_client
+        self.ai_client = ai_client
 
-        if not self.openai_client:
-            raise RuntimeError("AuditAgent必须配置OpenAI客户端")
+        if not self.ai_client:
+            raise RuntimeError("AuditAgent必须配置AI客户端（OpenAI或智谱AI）")
 
         self.logger.info("AuditAgent初始化完成")
 
@@ -258,10 +258,10 @@ class AuditAgent:
                 {"role": "user", "content": f"Type: {violation_type}\n请根据模板生成拒绝回复。"}
             ]
 
-            # 调用OpenAI客户端生成拒绝回复
-            response = self.openai_client.chat_completion(
+            # 调用AI客户端生成拒绝回复
+            response = self.ai_client.chat_completion(
                 messages=messages,
-                model=getattr(self.openai_client.config, 'audit_model', 'gpt-3.5-turbo'),
+                model=getattr(self.ai_client.config, 'audit_model', 'glm-4.5-flash'),
                 temperature=0.7,  # 拒绝回复可以使用稍高的温度来产生更多样化的回复
                 max_tokens=200
             )
@@ -298,7 +298,7 @@ class AuditAgent:
         user_content = impulse.get_text_content()
 
         # 获取审计参数
-        from ..prompts.moral_audit_prompts import MoralAuditPrompts
+        from ...prompts.moral_audit_prompts import MoralAuditPrompts
         system_prompt = MoralAuditPrompts.get_audit_prompt()
 
         # 构建审查消息
@@ -307,12 +307,12 @@ class AuditAgent:
             {"role": "user", "content": user_content}
         ]
 
-        # 调用OpenAI客户端的chat_completion方法
-        audit_max_tokens = getattr(self.openai_client.config, 'audit_max_tokens', 500)  # 增加默认token限制
-        response = self.openai_client.chat_completion(
+        # 调用AI客户端的chat_completion方法
+        audit_max_tokens = getattr(self.ai_client.config, 'audit_max_tokens', 1000)  # 增加默认token限制
+        response = self.ai_client.chat_completion(
             messages=messages,
-            model=getattr(self.openai_client.config, 'audit_model', 'gpt-3.5-turbo'),
-            temperature=getattr(self.openai_client.config, 'audit_temperature', 0.0),
+            model=getattr(self.ai_client.config, 'audit_model', 'glm-4.5-flash'),
+            temperature=getattr(self.ai_client.config, 'audit_temperature', 0.0),
             max_tokens=audit_max_tokens
         )
 
@@ -342,7 +342,7 @@ class AuditAgent:
             audit_response = {"content": cleaned_content}
 
         # 验证响应格式（只对有效JSON格式进行验证）
-        from ..prompts.moral_audit_prompts import MoralAuditPrompts
+        from ...prompts.moral_audit_prompts import MoralAuditPrompts
 
         # 获取caesar_shift和nonce用于验证
         audit_parameters = impulse.metadata.get('audit_parameters', {})
@@ -384,7 +384,7 @@ class AuditAgent:
                 return audit_status
             else:
                 # 普通验证错误
-                raise RuntimeError(f"OpenAI响应验证失败: {validation_result.get('error')}")
+                raise RuntimeError(f"AI响应验证失败: {validation_result.get('error')}")
 
         # 创建审查状态
         audit_status = AuditStatus()
@@ -409,9 +409,9 @@ class AuditAgent:
             audit_status.approve("AI审查通过")
 
         # 存储AI审查结果
-        impulse.metadata['openai_audit_response'] = response
-        impulse.metadata['openai_audit_content'] = audit_response
-        impulse.metadata['openai_audit_validation'] = validation_result
+        impulse.metadata['ai_audit_response'] = response
+        impulse.metadata['ai_audit_content'] = audit_response
+        impulse.metadata['ai_audit_validation'] = validation_result
 
         return audit_status
     
@@ -423,7 +423,7 @@ class AuditAgent:
             "capabilities": [
                 "input_content_audit",
                 "output_content_audit",
-                "openai_client_integration",
+                "ai_client_integration",
                 "moral_audit_ai_v2_prompts",
                 "ai_powered_audit",
                 "security_filtering",
@@ -436,9 +436,9 @@ class AuditAgent:
                 "dual_randomness_validation": True,
                 "system_prompt_injection": True,
                 "protobuf_content": "mandatory",
-                "openai_required": True,
+                "ai_client_required": True,
                 "no_local_fallback": True,
-                "crash_on_missing_openai": True,
+                "crash_on_missing_ai_client": True,
                 "protobuf_compilation_required": True
             }
         }

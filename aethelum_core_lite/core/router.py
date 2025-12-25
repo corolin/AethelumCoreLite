@@ -7,12 +7,28 @@
 import logging
 import threading
 import time
-from typing import Callable, Dict, List, Optional, Set, Any
+from typing import Callable, Dict, List, Optional, Set, Any, Union
+from enum import Enum
+from dataclasses import asdict
 from .message import NeuralImpulse
 from .queue import SynapticQueue
 from .worker import AxonWorker
-from .openai_client import OpenAIConfig
-from .zhipu_client import ZhipuClientManager
+
+
+class QueuePriority(Enum):
+    """队列优先级枚举"""
+    CRITICAL = 1  # 关键队列，如错误处理
+    HIGH = 2      # 高优先级队列
+    NORMAL = 3    # 普通优先级队列
+    LOW = 4       # 低优先级队列
+
+
+class HookType(Enum):
+    """Hook类型枚举"""
+    PRE_PROCESS = "pre_process"  # 预处理Hook
+    POST_PROCESS = "post_process"  # 后处理Hook
+    ERROR_HANDLER = "error_handler"  # 错误处理Hook
+    TRANSFORM = "transform"  # 转换Hook
 
 
 class NeuralSomaRouter:
@@ -23,54 +39,48 @@ class NeuralSomaRouter:
     - 维护队列实例和钩子映射
     - 管理Worker线程的生命周期
     - 提供神经系统的启动/激活接口
-    - 强制执行安全审计流程
+    - 支持可选的安全审计流程
+    - 支持队列优先级管理
+    - 支持多个Hook注册和执行
+    - 支持动态调整队列和工作器
+    - 提供详细的性能监控
     """
 
     # 强制性核心队列
     MANDATORY_QUEUES = {
-        'Q_AUDIT_INPUT',     # 输入审查
-        'Q_AUDITED_INPUT',   # 审计后输入
-        'Q_AUDIT_OUTPUT',    # 输出审查
-        'Q_RESPONSE_SINK',   # 响应发送器
-        'Q_ERROR_HANDLER',    # 错误处理器
-        'Q_DONE'             # 消息终止处理器
+        'Q_AUDIT_INPUT': {'priority': QueuePriority.HIGH, 'description': '输入审查队列'},
+        'Q_AUDIT_OUTPUT': {'priority': QueuePriority.HIGH, 'description': '输出审查队列'},
+        'Q_RESPONSE_SINK': {'priority': QueuePriority.CRITICAL, 'description': '响应汇聚队列'},
+        'Q_DONE': {'priority': QueuePriority.NORMAL, 'description': '完成队列'},
+        'Q_ERROR': {'priority': QueuePriority.CRITICAL, 'description': '错误处理队列'}
     }
 
-    # 审计相关的队列（由路由器自动管理）
-    AUDIT_QUEUES = {
-        'Q_AUDIT_INPUT',
-        'Q_AUDITED_INPUT',
-        'Q_AUDIT_OUTPUT'
-    }
-
-    # 禁止注册钩子的队列（审计队列由路由器管理）
-    FORBIDDEN_HOOK_QUEUES = {
-        'Q_AUDIT_INPUT',
-        'Q_AUDIT_OUTPUT'
-    }
-
-    def __init__(self, enable_logging: bool = True, openai_config: Optional[OpenAIConfig] = None):
+    def __init__(self, enable_logging: bool = True):
         """
         初始化神经胞体路由器
 
         Args:
             enable_logging: 是否启用日志记录
-            openai_config: OpenAI客户端配置（可选）
         """
         # 队列管理
         self._queues: Dict[str, SynapticQueue] = {}
+        self._queue_priorities: Dict[str, QueuePriority] = {}
         self._lock = threading.RLock()
 
-        # Hook映射：队列名 -> Hook函数
-        self._hooks: Dict[str, Callable] = {}
+        # Hook映射：队列名 -> {HookType: [Hook函数]}
+        self._hooks: Dict[str, Dict[HookType, List[Callable]]] = {}
 
         # Worker管理
         self._workers: Dict[str, List[AxonWorker]] = {}
         self._router_active = False
 
-        # 审计Agent管理（内部自动创建）
-        self._audit_agent = None
-        self._zhipu_client = None  # 延迟初始化，在logger创建后
+        # 性能监控
+        self._performance_metrics = {
+            'queue_processing_times': {},  # 队列名 -> [处理时间列表]
+            'hook_execution_times': {},    # 队列名 -> {HookType: [执行时间列表]}
+            'worker_utilization': {},      # 队列名 -> [工作器利用率列表]
+            'last_metrics_update': time.time()
+        }
 
         # 统计信息
         self._stats = {
@@ -78,7 +88,9 @@ class NeuralSomaRouter:
             'activated_at': None,
             'total_impulses_processed': 0,
             'total_hooks_registered': 0,
-            'total_queues_created': 0
+            'total_queues_created': 0,
+            'total_workers_created': 0,
+            'total_errors': 0
         }
 
         # 日志设置
@@ -89,34 +101,15 @@ class NeuralSomaRouter:
             )
         self.logger = logging.getLogger("NeuralSomaRouter")
 
-        # Zhipu客户端管理（移到logger创建后）
-        if openai_config:
-            try:
-                zhipu_manager = ZhipuClientManager.create_from_openai_config(openai_config)
-                self._zhipu_client = zhipu_manager.get_default_client()
-                if self._zhipu_client:
-                    self.logger.info(f"智谱AI客户端创建成功 - 模型: {openai_config.model}")
-                else:
-                    # 没有配置时直接抛出异常
-                    error_msg = "智谱AI客户端创建失败：SDK未安装或配置错误。请安装 zai-sdk: pip install zai-sdk"
-                    self.logger.error(error_msg)
-                    raise RuntimeError(error_msg)
-            except Exception as e:
-                error_msg = f"智谱AI客户端初始化失败: {e}"
-                self.logger.error(error_msg)
-                raise RuntimeError(error_msg)
-        else:
-            # 没有提供配置时也需要智谱AI客户端
-            error_msg = "未提供OpenAI配置。审计功能需要智谱AI客户端支持。"
-            self.logger.error(error_msg)
-            raise RuntimeError(error_msg)
+        self.logger.info("神经胞体路由器初始化完成")
 
     def create_queue(
         self,
         name: str,
         max_size: Optional[int] = None,
         durable: bool = False,
-        auto_delete: bool = False
+        auto_delete: bool = False,
+        priority: Optional[QueuePriority] = None
     ) -> SynapticQueue:
         """
         创建突触队列
@@ -126,6 +119,7 @@ class NeuralSomaRouter:
             max_size: 最大容量
             durable: 是否持久化
             auto_delete: 是否自动删除
+            priority: 队列优先级
 
         Returns:
             SynapticQueue: 创建的队列实例
@@ -136,16 +130,24 @@ class NeuralSomaRouter:
                 return self._queues[name]
 
             queue = SynapticQueue(
-                name=name,
-                max_size=max_size,
-                durable=durable,
-                auto_delete=auto_delete
+                queue_id=name,
+                max_size=max_size if max_size is not None else 0,
+                enable_persistence=durable
             )
 
             self._queues[name] = queue
+            # 设置队列优先级，如果未指定则使用默认值
+            if priority is None:
+                priority = self.QUEUE_PRIORITIES.get(name, QueuePriority.NORMAL)
+            self._queue_priorities[name] = priority
+            
+            # 初始化性能指标
+            self._performance_metrics['queue_processing_times'][name] = []
+            self._performance_metrics['worker_utilization'][name] = []
+            
             self._stats['total_queues_created'] += 1
 
-            self.logger.debug(f"创建突触队列: {name}")
+            self.logger.debug(f"创建突触队列: {name}, 优先级: {priority.name}")
             return queue
 
     def get_queue(self, name: str) -> Optional[SynapticQueue]:
@@ -153,10 +155,29 @@ class NeuralSomaRouter:
         with self._lock:
             return self._queues.get(name)
 
+    def get_queue_priority(self, name: str) -> Optional[QueuePriority]:
+        """获取队列优先级"""
+        with self._lock:
+            return self._queue_priorities.get(name)
+
+    def set_queue_priority(self, name: str, priority: QueuePriority) -> bool:
+        """设置队列优先级"""
+        with self._lock:
+            if name not in self._queues:
+                self.logger.error(f"队列 {name} 不存在")
+                return False
+            
+            old_priority = self._queue_priorities[name]
+            self._queue_priorities[name] = priority
+            self.logger.debug(f"队列 {name} 优先级从 {old_priority.name} 更改为 {priority.name}")
+            return True
+
     def register_hook(
         self,
         queue_name: str,
-        hook_function: Callable[[NeuralImpulse, str], NeuralImpulse]
+        hook_function: Callable[[NeuralImpulse, str], NeuralImpulse],
+        hook_type: HookType = HookType.PRE_PROCESS,
+        replace: bool = False
     ) -> None:
         """
         注册Hook函数到指定队列
@@ -164,24 +185,166 @@ class NeuralSomaRouter:
         Args:
             queue_name: 队列名称
             hook_function: Hook函数
+            hook_type: Hook类型
+            replace: 是否替换同类型的所有现有Hook
 
         Raises:
-            ValueError: 如果尝试向禁止的队列注册Hook
+            ValueError: 如果尝试向不存在的队列注册Hook
         """
-        # 强制检查：禁止向Q_AUDIT_INPUT和Q_AUDIT_OUTPUT注册Hook
-        if queue_name in self.FORBIDDEN_HOOK_QUEUES:
-            raise ValueError(
-                f"禁止向安全队列 {queue_name} 注册Hook。安全队列必须由系统管理。"
-            )
-
         with self._lock:
             if queue_name not in self._queues:
                 raise ValueError(f"队列 {queue_name} 不存在，请先创建队列")
 
-            self._hooks[queue_name] = hook_function
+            # 初始化队列的Hook字典（如果不存在）
+            if queue_name not in self._hooks:
+                self._hooks[queue_name] = {}
+            
+            # 初始化Hook类型的列表（如果不存在）
+            if hook_type not in self._hooks[queue_name]:
+                self._hooks[queue_name][hook_type] = []
+                
+            # 如果需要替换，则清空现有Hook
+            if replace:
+                self._hooks[queue_name][hook_type] = [hook_function]
+            else:
+                self._hooks[queue_name][hook_type].append(hook_function)
+                
             self._stats['total_hooks_registered'] += 1
 
-            self.logger.debug(f"注册Hook到队列: {queue_name}")
+            self.logger.debug(f"注册 {hook_type.value} Hook到队列: {queue_name}")
+
+    def unregister_hook(
+        self,
+        queue_name: str,
+        hook_function: Optional[Callable] = None,
+        hook_type: Optional[HookType] = None
+    ) -> int:
+        """
+        从指定队列注销Hook函数
+
+        Args:
+            queue_name: 队列名称
+            hook_function: 要注销的Hook函数（如果为None，则根据hook_type注销所有）
+            hook_type: Hook类型（如果为None，则注销所有类型的Hook）
+
+        Returns:
+            int: 注销的Hook数量
+        """
+        with self._lock:
+            if queue_name not in self._hooks:
+                return 0
+                
+            removed_count = 0
+            
+            # 如果指定了hook_type
+            if hook_type is not None:
+                if hook_type in self._hooks[queue_name]:
+                    hooks = self._hooks[queue_name][hook_type]
+                    if hook_function is None:
+                        # 注销该类型的所有Hook
+                        removed_count = len(hooks)
+                        del self._hooks[queue_name][hook_type]
+                    else:
+                        # 注销指定的Hook函数
+                        try:
+                            hooks.remove(hook_function)
+                            removed_count = 1
+                            if not hooks:  # 如果列表为空，删除该类型
+                                del self._hooks[queue_name][hook_type]
+                        except ValueError:
+                            pass  # Hook函数不存在
+            else:
+                # 注销所有类型的Hook
+                if hook_function is None:
+                    for hooks in self._hooks[queue_name].values():
+                        removed_count += len(hooks)
+                    del self._hooks[queue_name]
+                else:
+                    # 在所有类型中查找并注销指定的Hook函数
+                    for hook_type_key, hooks in list(self._hooks[queue_name].items()):
+                        try:
+                            hooks.remove(hook_function)
+                            removed_count += 1
+                            if not hooks:  # 如果列表为空，删除该类型
+                                del self._hooks[queue_name][hook_type_key]
+                        except ValueError:
+                            pass  # Hook函数不存在
+            
+            self._stats['total_hooks_registered'] -= removed_count
+            self.logger.debug(f"从队列 {queue_name} 注销了 {removed_count} 个Hook")
+            return removed_count
+
+    def get_hooks(
+        self,
+        queue_name: str,
+        hook_type: Optional[HookType] = None
+    ) -> Union[Dict[HookType, List[Callable]], List[Callable]]:
+        """
+        获取指定队列的Hook函数
+
+        Args:
+            queue_name: 队列名称
+            hook_type: Hook类型（如果为None，则返回所有类型的Hook）
+
+        Returns:
+            Union[Dict[HookType, List[Callable]], List[Callable]]: Hook函数字典或列表
+        """
+        with self._lock:
+            if queue_name not in self._hooks:
+                return {} if hook_type is None else []
+                
+            if hook_type is not None:
+                return self._hooks[queue_name].get(hook_type, [])
+            else:
+                return self._hooks[queue_name].copy()
+
+    def execute_hooks(
+        self,
+        impulse: NeuralImpulse,
+        queue_name: str,
+        hook_type: HookType = HookType.PRE_PROCESS
+    ) -> NeuralImpulse:
+        """
+        执行指定队列和类型的所有Hook函数
+
+        Args:
+            impulse: 神经脉冲
+            queue_name: 队列名称
+            hook_type: Hook类型
+
+        Returns:
+            NeuralImpulse: 处理后的神经脉冲
+        """
+        hooks = self.get_hooks(queue_name, hook_type)
+        if not hooks:
+            return impulse
+            
+        start_time = time.time()
+        
+        try:
+            for hook in hooks:
+                impulse = hook(impulse, queue_name)
+        except Exception as e:
+            self.logger.error(f"执行 {hook_type.value} Hook时出错: {e}")
+            self._stats['total_errors'] += 1
+            # 可以选择将错误脉冲发送到错误队列
+            if queue_name != 'Q_ERROR_HANDLER':
+                self._send_to_queue('Q_ERROR_HANDLER', impulse)
+        finally:
+            # 记录Hook执行时间
+            execution_time = time.time() - start_time
+            if queue_name not in self._performance_metrics['hook_execution_times']:
+                self._performance_metrics['hook_execution_times'][queue_name] = {}
+            if hook_type not in self._performance_metrics['hook_execution_times'][queue_name]:
+                self._performance_metrics['hook_execution_times'][queue_name][hook_type] = []
+            
+            # 只保留最近100次执行时间
+            times_list = self._performance_metrics['hook_execution_times'][queue_name][hook_type]
+            times_list.append(execution_time)
+            if len(times_list) > 100:
+                times_list.pop(0)
+                
+        return impulse
 
     def start_workers(
         self,
@@ -205,16 +368,52 @@ class NeuralSomaRouter:
                 raise ValueError(f"队列 {queue_name} 不存在")
 
             queue = self._queues[queue_name]
-            hook_function = custom_hook or self._hooks.get(queue_name)
+            hooks_list = []
+            
+            # 如果没有自定义Hook，则使用已注册的Hook
+            if not custom_hook and queue_name in self._hooks:
+                # 将字典中的所有Hook函数转换为BaseHook对象
+                for hook_type, hook_functions in self._hooks[queue_name].items():
+                    for hook_func in hook_functions:
+                        # 创建一个简单的BaseHook适配器
+                        class HookAdapter:
+                            def __init__(self, func, hook_type):
+                                self.func = func
+                                self.hook_type = hook_type
+                                
+                            def before_process(self, impulse):
+                                if self.hook_type == HookType.PRE_PROCESS:
+                                    return self.func(impulse, queue_name)
+                                return impulse
+                                
+                            def after_process(self, impulse):
+                                if self.hook_type == HookType.POST_PROCESS:
+                                    return self.func(impulse, queue_name)
+                                return impulse
+                        
+                        hooks_list.append(HookAdapter(hook_func, hook_type))
+            elif custom_hook:
+                # 使用自定义Hook
+                class CustomHookAdapter:
+                    def __init__(self, func):
+                        self.func = func
+                        
+                    def before_process(self, impulse):
+                        return self.func(impulse, queue_name)
+                        
+                    def after_process(self, impulse):
+                        return impulse
+                
+                hooks_list.append(CustomHookAdapter(custom_hook))
 
             # 创建工作器
             workers = []
             for i in range(num_workers):
                 worker = AxonWorker(
                     name=f"{queue_name}-worker-{i}",
-                    queue=queue,
-                    hook_function=hook_function,
-                    router_instance=self
+                    input_queue=queue,
+                    hooks=hooks_list if hooks_list else None,
+                    router=self
                 )
                 workers.append(worker)
 
@@ -222,6 +421,8 @@ class NeuralSomaRouter:
             if queue_name not in self._workers:
                 self._workers[queue_name] = []
             self._workers[queue_name].extend(workers)
+            
+            self._stats['total_workers_created'] += num_workers
 
             # 启动工作器
             for worker in workers:
@@ -230,43 +431,96 @@ class NeuralSomaRouter:
             self.logger.debug(f"为队列 {queue_name} 启动了 {num_workers} 个工作器")
             return workers
 
+    def adjust_workers(
+        self,
+        queue_name: str,
+        target_count: int
+    ) -> int:
+        """
+        动态调整指定队列的工作器数量
+
+        Args:
+            queue_name: 队列名称
+            target_count: 目标工作器数量
+
+        Returns:
+            int: 实际调整的工作器数量（正数为增加，负数为减少）
+        """
+        with self._lock:
+            if queue_name not in self._queues:
+                raise ValueError(f"队列 {queue_name} 不存在")
+                
+            current_count = len(self._workers.get(queue_name, []))
+            adjustment = target_count - current_count
+            
+            if adjustment == 0:
+                return 0
+                
+            if adjustment > 0:
+                # 增加工作器
+                self.start_workers(queue_name, adjustment)
+                self.logger.debug(f"为队列 {queue_name} 增加了 {adjustment} 个工作器")
+            else:
+                # 减少工作器
+                workers_to_stop = abs(adjustment)
+                workers = self._workers[queue_name][:workers_to_stop]
+                
+                for worker in workers:
+                    worker.stop()
+                    worker.join(timeout=5.0)
+                    self._workers[queue_name].remove(worker)
+                    
+                self.logger.debug(f"为队列 {queue_name} 减少了 {workers_to_stop} 个工作器")
+                
+            return adjustment
+
+    def get_queues_by_priority(self, priority: QueuePriority) -> List[str]:
+        """
+        获取指定优先级的所有队列名称
+
+        Args:
+            priority: 队列优先级
+
+        Returns:
+            List[str]: 队列名称列表
+        """
+        with self._lock:
+            return [name for name, p in self._queue_priorities.items() if p == priority]
+
+    def get_all_queues_sorted_by_priority(self) -> List[str]:
+        """
+        获取按优先级排序的所有队列名称
+
+        Returns:
+            List[str]: 按优先级排序的队列名称列表
+        """
+        with self._lock:
+            return sorted(
+                self._queues.keys(),
+                key=lambda name: self._queue_priorities.get(name, QueuePriority.NORMAL).value
+            )
+
     def activate(self) -> None:
         """
         激活整个神经系统
 
-        自动创建所有强制性队列，初始化审计组件，启动必要的工作器。
+        自动创建所有强制性队列，启动必要的工作器。
         """
         with self._lock:
             if self._router_active:
                 self.logger.warning("神经系统已经激活")
                 return
-
-            # 自动创建所有强制性队列
-            self._initialize_mandatory_queues()
-
-            # 自动创建和设置审计组件
-            self._setup_audit_hooks()
-
-            # 确保所有强制性队列都存在
-            missing_queues = self.MANDATORY_QUEUES - set(self._queues.keys())
-            if missing_queues:
-                raise ValueError(f"缺少强制性队列: {missing_queues}")
-
+            
+            # 创建所有强制性队列
+            for queue_name, queue_config in self.MANDATORY_QUEUES.items():
+                if queue_name not in self._queues:
+                    priority = queue_config['priority']
+                    self.create_queue(queue_name, priority=priority)
+                    self.logger.debug(f"创建强制性队列: {queue_name}")
+            
             self._router_active = True
             self._stats['activated_at'] = time.time()
             self.logger.info("神经系统已激活")
-
-    def _initialize_mandatory_queues(self) -> None:
-        """自动初始化所有强制性队列"""
-        self.logger.info("初始化强制性队列...")
-
-        for queue_name in self.MANDATORY_QUEUES:
-            if queue_name not in self._queues:
-                self.create_queue(queue_name)
-                self.logger.debug(f"自动创建队列: {queue_name}")
-
-        # 为 Q_DONE 队列设置内置的 Done handler
-        self._setup_builtin_done_handler()
 
     def _setup_builtin_done_handler(self) -> None:
         """设置内置的 Done 消息处理器"""
@@ -279,54 +533,25 @@ class NeuralSomaRouter:
             # 保持 action_intent = "Done" 防止进一步路由
             return impulse
 
+        # 确保Done队列存在
+        if "Q_DONE" not in self._queues:
+            self.create_queue("Q_DONE", priority=QueuePriority.LOW)
+            
         # 注册内置的 Done handler 并启动工作器
         self.register_hook("Q_DONE", handle_done)
         self.start_workers("Q_DONE", 1)  # 通常只需要一个工作器处理终止消息
         self.logger.debug("内置Done处理器已注册")
 
-    def _create_audit_agent(self) -> Optional['AuditAgent']:
-        """自动创建审计Agent"""
-        if not self._zhipu_client:
-            self.logger.warning("无法创建审计Agent：缺少智谱AI客户端")
-            return None
-
-        try:
-            from ..agents.audit_agent import AuditAgent
-            agent_name = "NeuralSomaAuditAgent"  # 固定名称，用户无需关心
-            self._audit_agent = AuditAgent(agent_name, self._zhipu_client)
-            self.logger.info(f"审计Agent创建成功: {agent_name}")
-            return self._audit_agent
-        except Exception as e:
-            self.logger.error(f"创建审计Agent失败: {e}")
-            return None
-
-    def _setup_audit_hooks(self, audit_agent=None) -> None:
-        """自动设置审计相关的钩子"""
-        # 如果没有提供审计Agent，尝试自动创建
-        if not audit_agent:
-            audit_agent = self._create_audit_agent()
-
-        # 审计Agent必须存在
-        if not audit_agent:
-            error_msg = "审计Agent创建失败。无法继续初始化系统。"
-            self.logger.error(error_msg)
-            raise RuntimeError(error_msg)
-
-        # 设置审计钩子
-        self.logger.info("设置审计钩子...")
-
-        # 注册输入审计钩子
-        self.start_workers("Q_AUDIT_INPUT", 1, audit_agent.process_input_audit)
-
-        # 注册输出审计钩子
-        self.start_workers("Q_AUDIT_OUTPUT", 1, audit_agent.process_output_audit)
-
-        self.logger.info("审计钩子设置完成")
-
+    def _setup_error_handler(self) -> None:
+        """设置默认错误处理器"""
+        # 确保错误处理队列存在
+        if "Q_ERROR_HANDLER" not in self._queues:
+            self.create_queue("Q_ERROR_HANDLER", priority=QueuePriority.HIGH)
+        
         # 创建默认错误处理器并注册钩子
         from .hooks import create_default_error_handler
         error_handler = create_default_error_handler()
-        self.register_hook("Q_ERROR_HANDLER", error_handler)
+        self.register_hook("Q_ERROR_HANDLER", error_handler, HookType.ERROR_HANDLER)
         self.start_workers("Q_ERROR_HANDLER", 1)
 
     def setup_business_handlers(self, business_handler=None, response_handler=None) -> None:
@@ -338,12 +563,18 @@ class NeuralSomaRouter:
             response_handler: 响应处理钩子函数
         """
         if business_handler:
-            self.register_hook("Q_AUDITED_INPUT", business_handler)
-            self.start_workers("Q_AUDITED_INPUT", 1)
+            # 确保业务处理队列存在
+            if "Q_PROCESS_INPUT" not in self._queues:
+                self.create_queue("Q_PROCESS_INPUT", priority=QueuePriority.HIGH)
+            self.register_hook("Q_PROCESS_INPUT", business_handler, HookType.PRE_PROCESS)
+            self.start_workers("Q_PROCESS_INPUT", 1)
             self.logger.info("业务处理器已注册")
 
         if response_handler:
-            self.register_hook("Q_RESPONSE_SINK", response_handler)
+            # 确保响应处理队列存在
+            if "Q_RESPONSE_SINK" not in self._queues:
+                self.create_queue("Q_RESPONSE_SINK", priority=QueuePriority.NORMAL)
+            self.register_hook("Q_RESPONSE_SINK", response_handler, HookType.POST_PROCESS)
             self.start_workers("Q_RESPONSE_SINK", 1)
             self.logger.info("响应处理器已注册")
 
@@ -357,8 +588,11 @@ class NeuralSomaRouter:
         """
         self.logger.info("开始自动设置神经系统...")
 
-        # 激活系统（自动创建审计Agent和所有组件，包括Done队列）
+        # 激活系统（自动创建所有组件，包括Done队列）
         self.activate()
+
+        # 设置错误处理器
+        self._setup_error_handler()
 
         # 设置业务组件
         self.setup_business_handlers(business_handler, response_handler)
@@ -382,15 +616,10 @@ class NeuralSomaRouter:
             self.logger.error("神经系统未激活，无法注入神经脉冲")
             return False
 
-        # 必须有审计Agent，走审计流程
-        if not self._audit_agent:
-            self.logger.error("审计Agent未初始化，无法注入消息")
-            return False
-
-        impulse.action_intent = 'Q_AUDIT_INPUT'
+        impulse.action_intent = 'Q_PROCESS_INPUT'
         # 添加初始处理节点记录
         impulse.add_to_history("INPUT_GATEWAY")
-        return self._send_to_queue('Q_AUDIT_INPUT', impulse)
+        return self._send_to_queue('Q_PROCESS_INPUT', impulse)
 
     def _send_to_queue(self, queue_name: str, impulse: NeuralImpulse) -> bool:
         """
@@ -408,15 +637,27 @@ class NeuralSomaRouter:
             self.logger.error(f"目标队列不存在: {queue_name}")
             return False
 
+        start_time = time.time()
+        
         try:
             success = queue.put(impulse, block=True, timeout=5.0)
             if success:
                 with self._lock:
                     self._stats['total_impulses_processed'] += 1
+                    
+                # 记录处理时间
+                processing_time = time.time() - start_time
+                times_list = self._performance_metrics['queue_processing_times'][queue_name]
+                times_list.append(processing_time)
+                # 只保留最近100次处理时间
+                if len(times_list) > 100:
+                    times_list.pop(0)
+                    
                 self.logger.debug(f"神经脉冲已发送到队列 {queue_name}: {impulse.session_id[:8]}...")
             return success
         except Exception as e:
             self.logger.error(f"发送神经脉冲到队列 {queue_name} 失败: {e}")
+            self._stats['total_errors'] += 1
             return False
 
     def stop(self) -> None:
@@ -445,9 +686,10 @@ class NeuralSomaRouter:
             queue_stats = {}
             total_queue_size = 0
             for name, queue in self._queues.items():
-                stats = queue.get_stats()
-                queue_stats[name] = stats
-                total_queue_size += stats['current_size']
+                stats_dict = asdict(queue.get_stats())
+                stats_dict['priority'] = self._queue_priorities.get(name, QueuePriority.NORMAL).name
+                queue_stats[name] = stats_dict
+                total_queue_size += stats_dict['queue_size']
 
             # 统计所有工作器的信息
             worker_stats = {}
@@ -455,6 +697,9 @@ class NeuralSomaRouter:
             for queue_name, workers in self._workers.items():
                 worker_stats[queue_name] = [worker.get_stats() for worker in workers]
                 total_workers += len(workers)
+                
+            # 计算性能指标
+            performance_stats = self._calculate_performance_stats()
 
             return {
                 **self._stats,
@@ -462,13 +707,41 @@ class NeuralSomaRouter:
                 'uptime_seconds': uptime,
                 'runtime_seconds': runtime,
                 'queue_count': len(self._queues),
-                'hook_count': len(self._hooks),
+                'hook_count': sum(len(hooks) for hooks in self._hooks.values()),
                 'worker_count': total_workers,
                 'total_queue_size': total_queue_size,
-                'mandatory_queues_present': self.MANDATORY_QUEUES.issubset(set(self._queues.keys())),
+                'mandatory_queues_present': set(self.MANDATORY_QUEUES.keys()).issubset(set(self._queues.keys())),
                 'queues': queue_stats,
-                'workers': worker_stats
+                'workers': worker_stats,
+                'performance': performance_stats
             }
+
+    def _calculate_performance_stats(self) -> Dict[str, Any]:
+        """计算性能统计信息"""
+        stats = {
+            'queue_avg_processing_times': {},
+            'hook_avg_execution_times': {},
+            'worker_avg_utilization': {}
+        }
+        
+        # 计算队列平均处理时间
+        for queue_name, times in self._performance_metrics['queue_processing_times'].items():
+            if times:
+                stats['queue_avg_processing_times'][queue_name] = sum(times) / len(times)
+                
+        # 计算Hook平均执行时间
+        for queue_name, hook_types in self._performance_metrics['hook_execution_times'].items():
+            stats['hook_avg_execution_times'][queue_name] = {}
+            for hook_type, times in hook_types.items():
+                if times:
+                    stats['hook_avg_execution_times'][queue_name][hook_type.value] = sum(times) / len(times)
+                    
+        # 计算工作器平均利用率
+        for queue_name, utilizations in self._performance_metrics['worker_utilization'].items():
+            if utilizations:
+                stats['worker_avg_utilization'][queue_name] = sum(utilizations) / len(utilizations)
+                
+        return stats
 
     def list_queues(self) -> List[str]:
         """列出所有队列名称"""
@@ -490,7 +763,7 @@ class NeuralSomaRouter:
     def __str__(self) -> str:
         """字符串表示"""
         status = "已激活" if self._router_active else "未激活"
-        return f"NeuralSomaRouter(queues={len(self._queues)}, hooks={len(self._hooks)}, status={status})"
+        return f"NeuralSomaRouter(queues={len(self._queues)}, hooks={sum(len(hooks) for hooks in self._hooks.values())}, status={status})"
 
     def __repr__(self) -> str:
         """详细字符串表示"""
