@@ -189,6 +189,7 @@ Thumbs.db
 config.json
 .env.*
 secrets.json
-.claude/
+.claude/settings*.json
+.claude/.history/
 .docs/
 .roocode/
