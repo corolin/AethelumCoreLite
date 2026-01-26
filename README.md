@@ -346,7 +346,122 @@ queue = SynapticQueue(
 - **可选审核**: 提供内容安全审查示例，可根据需要启用
 - **ProtoBuf支持**: 可选的消息序列化和加密传输
 - **灵活架构**: 支持自定义安全验证机制
-- **AI驱动**: 基于智谱AI的智能内容处理
+
+## 并发安全性
+
+### 线程安全保证
+
+AethelumCoreLite 核心组件已实现全面的线程安全保护：
+
+#### ✅ 已保护的组件
+
+1. **SynapticQueue (突触队列)**
+   - 使用 `threading.RLock` 保护内部状态
+   - put/get 操作原子性保证
+   - 统计信息线程安全更新
+   - 避免队列与映射数据不一致
+
+2. **WorkerMonitor (工作器监控器)**
+   - `_metrics_lock` 保护指标数据
+   - `_alerts_lock` 保护告警数据
+   - 多线程环境下的数据一致性保证
+   - 所有读取操作返回数据副本
+
+3. **AxonWorker (轴突工作器)**
+   - `_stats_lock` 保护统计信息
+   - 健康检查线程安全
+   - 返回副本防止外部修改
+
+4. **WorkerScheduler (工作器调度器)**
+   - `_rr_lock` 保护轮询索引
+   - 负载信息更新线程安全
+   - 避免调度冲突
+
+5. **Router (神经路由器)**
+   - 性能指标记录线程安全
+   - Hooks快照避免并发修改
+   - 统计信息原子更新
+
+### 使用最佳实践
+
+#### ✅ 推荐做法
+
+```python
+# 1. 使用线程安全的数据结构
+import threading
+
+# 使用锁保护的字典
+data_lock = threading.Lock()
+shared_data = {}
+
+def thread_safe_write(key, value):
+    with data_lock:
+        shared_data[key] = value
+
+def thread_safe_read():
+    with data_lock:
+        return shared_data.copy()
+
+# 2. 避免在锁内执行耗时操作
+with lock:
+    data = modify_data()  # ✅ 快速操作
+
+# 不要这样做
+with lock:
+    result = slow_network_call()  # ❌ 阻塞其他线程
+
+# 3. 使用 RLock 支持重入
+class MyClass:
+    def __init__(self):
+        self._lock = threading.RLock()
+
+    def method1(self):
+        with self._lock:
+            self.method2()  # ✅ 可以重入
+
+    def method2(self):
+        with self._lock:
+            # 临界区
+            pass
+```
+
+#### ❌ 常见陷阱
+
+```python
+# 1. 字典无锁并发修改
+responses = {}  # ❌ 不安全
+
+def handler(impulse):
+    responses[impulse.id] = impulse  # 多线程写入会丢失数据
+
+# 正确做法
+responses_lock = threading.Lock()
+responses = {}
+
+def handler(impulse):
+    with responses_lock:
+        responses[impulse.id] = impulse
+
+# 2. 返回共享状态的引用
+class Queue:
+    def get_stats(self):
+        return self._stats  # ❌ 返回引用，外部可修改
+
+# 正确做法
+def get_stats(self):
+    with self._lock:
+        return QueueStats(
+            total_messages=self._stats.total_messages,
+            # ... 返回副本
+        )
+```
+
+### 性能考虑
+
+- **锁粒度**: 使用细粒度锁减少竞争
+- **锁持有时间**: 最小化临界区，避免在锁内执行耗时操作
+- **读写分离**: 考虑使用读写锁分离读多写少场景
+- **避免死锁**: 统一锁顺序，避免嵌套锁
 
 ## 开发
 
@@ -363,4 +478,139 @@ black aethelum_core_lite/
 ### 类型检查
 ```bash
 mypy aethelum_core_lite/
+```
+
+## 故障排查
+
+### 并发相关问题
+
+#### 症状1: 数据丢失或不一致
+
+**可能原因**:
+- 共享数据结构无锁保护
+- 返回了内部状态的引用而非副本
+
+**诊断方法**:
+```python
+# 添加调试日志
+import logging
+
+logging.basicConfig(level=logging.DEBUG)
+logger = logging.getLogger(__name__)
+
+def thread_safe_operation():
+    logger.debug(f"Thread {threading.current_thread().name} acquiring lock")
+    with lock:
+        logger.debug(f"Thread {threading.current_thread().name} in critical section")
+        # 操作
+    logger.debug(f"Thread {threading.current_thread().name} released lock")
+```
+
+**解决方案**:
+- 为所有共享状态添加锁保护
+- 使用 `dict.copy()` 返回副本
+
+#### 症状2: 性能突然下降
+
+**可能原因**:
+- 锁竞争严重
+- 死锁或活锁
+
+**诊断方法**:
+```python
+import threading
+import time
+
+class LockMonitor:
+    def __init__(self, lock):
+        self._lock = lock
+        self._wait_times = []
+
+    def __enter__(self):
+        start = time.time()
+        self._lock.acquire()
+        wait_time = time.time() - start
+        self._wait_times.append(wait_time)
+        if wait_time > 1.0:  # 等待超过1秒
+            logging.warning(f"Long lock wait: {wait_time:.2f}s")
+        return self
+
+    def __exit__(self, *args):
+        self._lock.release()
+
+# 使用
+monitor = LockMonitor(lock)
+with monitor:
+    # 临界区
+    pass
+```
+
+**解决方案**:
+- 减小锁粒度
+- 使用读写锁分离读写操作
+- 考虑无锁数据结构
+
+### 依赖问题
+
+#### 症状: 环境差异导致的行为不一致
+
+**解决方案**:
+```bash
+# 1. 使用锁文件安装依赖
+pip install -r requirements/base-lock.txt
+
+# 2. 验证依赖版本
+pip list
+
+# 3. 检查依赖冲突
+pip check
+
+# 4. 安全扫描
+pip-audit
+```
+
+### 常见错误
+
+#### 错误1: ImportError: No module named 'xxx'
+
+**原因**: 缺少依赖
+
+**解决**:
+```bash
+pip install -r requirements/base-lock.txt
+```
+
+#### 错误2: RuntimeError: dictionary changed size during iteration
+
+**原因**: 遍历时修改字典
+
+**解决**: 使用快照遍历
+```python
+# 修改前
+for key, value in dict.items():
+    if condition:
+        del dict[key]
+
+# 修改后
+items_snapshot = list(dict.items())
+for key, value in items_snapshot:
+    if condition:
+        with lock:
+            del dict[key]
+```
+
+#### 错误3: 示例运行失败
+
+**原因**: 可能缺少依赖或配置错误
+
+**解决**:
+```bash
+# 1. 检查依赖
+pip list | grep -E "requests|protobuf"
+
+# 2. 检查Python版本（需要 3.8+）
+python --version
+
+# 3. 清理缓存重新安装
+pip install --no-cache-dir -r requirements/base-lock.txt
 ```
