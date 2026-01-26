@@ -90,7 +90,6 @@ python3 -m build --outdir dist/
 ```toml
 [project]
 dependencies = [
-    "openai>=1.0.0",
     "requests>=2.25.0",
     "protobuf>=3.20.0",
     "your-package>=1.0.0",  # 添加新依赖

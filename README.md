@@ -5,7 +5,6 @@
 ## 特性
 
 - 🧠 **树神经架构**: 基于生物树神经概念的通信框架
-- 🤖 **智谱AI集成**: 默认集成智谱AI客户端，支持深度思考模式
 - ⚡ **极致性能**: 异步 WAL + msgpack，持久化性能损失仅 7%，吞吐量达 40,000+ msg/s
 - 💾 **高性能持久化**: 采用 WAL 架构，非阻塞写入，自动故障恢复
 - 📦 **ProtoBuf支持**: 高效消息序列化（可选依赖）
@@ -340,33 +339,6 @@ queue = SynapticQueue(
 )
 # 自动加载 log1 中未处理的消息
 # 自动执行清理（移除上次运行已处理的消息）
-```
-
-## 配置
-
-### 智谱AI配置（推荐）
-```python
-from aethelum_core_lite.core.zhipu_client import ZhipuConfig, ZhipuSDKClient
-
-config = ZhipuConfig(
-    api_key="your-zhipu-api-key",
-    model="glm-4.5-flash",
-    audit_model="glm-4.5-flash",
-    audit_temperature=0.0,
-    audit_max_tokens=1000,
-    thinking_type="disabled"  # 可选："enabled" 启用深度思考模式
-)
-
-client = ZhipuSDKClient(config)
-```
-
-### 审计Agent配置（示例）
-```python
-# 审计流程作为示例提供，非强制使用
-audit_agent = AuditAgent(
-    agent_name="CustomAuditAgent",
-    client=client  # 支持智谱AI或OpenAI兼容客户端
-)
 ```
 
 ## 安全特性

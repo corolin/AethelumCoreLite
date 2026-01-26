@@ -1,0 +1,10 @@
+# AethelumCoreLite 开发依赖
+# 生成锁文件命令: pip-compile requirements/dev.in --output-file=requirements/dev-lock.txt
+
+-r base.in
+
+pytest>=6.0.0
+pytest-asyncio>=0.21.0
+black>=22.0.0
+flake8>=4.0.0
+mypy>=0.991

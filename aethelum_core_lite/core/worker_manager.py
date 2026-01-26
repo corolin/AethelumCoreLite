@@ -466,9 +466,12 @@ class WorkerManager:
     
     def _check_workers_health(self):
         """检查所有工作器的健康状态"""
-        for worker_id, worker in self._workers.items():
+        # 使用快照遍历，避免在遍历过程中修改字典导致的并发安全问题
+        workers_snapshot = list(self._workers.items())
+
+        for worker_id, worker in workers_snapshot:
             old_state = worker.get_state()
-            
+
             # 检查工作器是否健康
             if not worker.is_healthy():
                 self.logger.warning(f"Worker {worker.name} is unhealthy: {worker.get_stats().health_score}")
@@ -493,7 +496,7 @@ class WorkerManager:
             else:
                 # 重置恢复尝试次数
                 self._worker_recovery_attempts[worker_id] = 0
-            
+
             # 检查状态变化
             new_state = worker.get_state()
             if old_state != new_state:

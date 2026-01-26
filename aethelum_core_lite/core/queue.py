@@ -153,11 +153,12 @@ class SynapticQueue:
         impulse.metadata["priority"] = priority
 
         try:
-            # 使用优先级队列，(priority, timestamp, message_id, impulse)
-            item = (priority, time.time(), message_id, impulse)
-            self._queue.put(item, block=block, timeout=timeout)
-
             with self._lock:
+                # 使用优先级队列，(priority, timestamp, message_id, impulse)
+                item = (priority, time.time(), message_id, impulse)
+                self._queue.put(item, block=block, timeout=timeout)
+
+                # 更新消息映射
                 self._message_map[message_id] = impulse
                 self._stats.total_messages += 1
                 self._stats.last_activity = time.time()
@@ -168,9 +169,9 @@ class SynapticQueue:
                 self._stats.priority_distribution[priority_key] = \
                     self._stats.priority_distribution.get(priority_key, 0) + 1
 
-            # WAL: 追加消息到内存缓冲（O(1)操作，非阻塞）
-            if self.enable_persistence:
-                self._log1_buffer.append((message_id, priority, impulse))
+                # WAL: 追加消息到内存缓冲（O(1)操作，非阻塞）
+                if self.enable_persistence:
+                    self._log1_buffer.append((message_id, priority, impulse))
 
             return True
         except queue.Full:
@@ -189,31 +190,33 @@ class SynapticQueue:
         if self._closed:
             return None
 
+        # 先从队列获取消息（可能阻塞，不在锁内）
         try:
             priority, timestamp, message_id, impulse = self._queue.get(block=block, timeout=timeout)
+        except queue.Empty:
+            return None
 
-            # 检查消息是否过期
-            if self._is_expired(impulse):
-                self._queue.task_done()
-                return self.get(block, timeout)  # 递归获取下一个消息
+        # 检查消息是否过期
+        if self._is_expired(impulse):
+            self._queue.task_done()
+            return self.get(block, timeout)  # 递归获取下一个消息
 
-            processing_start = time.time()
+        processing_start = time.time()
 
-            with self._lock:
-                # 从映射中移除
-                if message_id in self._message_map:
-                    del self._message_map[message_id]
+        # 在锁内完成所有剩余操作（原子性）
+        with self._lock:
+            # 从映射中移除
+            if message_id in self._message_map:
+                del self._message_map[message_id]
 
-                self._stats.queue_size = self._queue.qsize()
-                self._stats.last_activity = time.time()
+            self._stats.queue_size = self._queue.qsize()
+            self._stats.last_activity = time.time()
 
             # WAL: 追加消息ID到内存缓冲（O(1)操作，非阻塞）
             if self.enable_persistence:
                 self._log2_buffer.append(message_id)
 
-            return impulse
-        except queue.Empty:
-            return None
+        return impulse
     
     def task_done(self, processing_time: Optional[float] = None):
         """标记任务完成并更新统计信息

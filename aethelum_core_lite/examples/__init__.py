@@ -4,7 +4,7 @@ Aethelum Core Lite 示例程序包
 包含多个示例程序，演示框架的各种功能和使用方式。
 
 示例程序:
-- main: 主入口程序，提供菜单选择和OpenAI配置
+- main: 主入口程序，提供菜单选择
 - moral_audit_example: 基础内容安全审查示例
 - protobuf_audit_example: ProtoBuf集成示例
 

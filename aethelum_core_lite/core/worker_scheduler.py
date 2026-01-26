@@ -109,7 +109,8 @@ class WorkerScheduler:
         
         # 轮询调度索引
         self._round_robin_index = 0
-        
+        self._rr_lock = threading.Lock()  # 保护轮询索引的并发访问
+
         # 统计信息
         self._stats = SchedulerStats(
             scheduler_id=self.scheduler_id,
@@ -242,20 +243,20 @@ class WorkerScheduler:
     
     def _select_worker_round_robin(self, available_workers: List[WorkerLoadInfo]) -> str:
         """使用轮询策略选择工作器
-        
+
         Args:
             available_workers: 可用的工作器列表
-            
+
         Returns:
             str: 选中的工作器ID
         """
         if not available_workers:
             return ""
-        
-        # 更新轮询索引
-        self._round_robin_index = (self._round_robin_index + 1) % len(available_workers)
-        
-        return available_workers[self._round_robin_index].worker_id
+
+        # 使用锁保护轮询索引的并发更新
+        with self._rr_lock:
+            self._round_robin_index = (self._round_robin_index + 1) % len(available_workers)
+            return available_workers[self._round_robin_index].worker_id
     
     def _select_worker_least_loaded(self, available_workers: List[WorkerLoadInfo]) -> str:
         """使用最少负载策略选择工作器

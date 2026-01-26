@@ -1,6 +1,6 @@
-# Aethelum Core Lite 示例程序
+# AethelumCoreLite 示例程序
 
-本目录包含了Aethelum Core Lite框架的示例程序，帮助您快速了解和使用框架的各种功能。
+本目录包含了AethelumCoreLite框架的示例程序，帮助您快速了解和使用框架的各种功能。
 
 ## 🚀 快速开始
 
@@ -14,57 +14,50 @@ python -m aethelum_core_lite.examples.main
 
 主入口程序提供：
 - 📋 交互式菜单选择不同示例
-- ⚙️ 智谱AI客户端代码配置（推荐）
-- 📊 配置状态检查
+- 🎯 非交互模式支持（CI/CD友好）
 - 🔄 示例运行后的返回菜单
 
-### 智谱AI配置方法（推荐）
-
-运行主入口程序并选择选项4，程序会检测配置状态。如果未配置，会提示您按以下方法配置：
-
-**🔧 方法1: 使用配置文件（推荐）**
-1. 复制 `config_template.py` 为 `config.py`
-2. 在 `config.py` 中填写您的智谱AI API密钥
-3. 重新运行程序
-
-**🔧 方法2: 直接编辑代码**
-1. 编辑 `aethelum_core_lite/examples/main.py` 文件
-2. 找到智谱AI配置部分
-3. 填写您的智谱AI API密钥：`api_key="your-zhipu-api-key-here"`
-4. 重新运行程序
-
-💡 **获取智谱AI API密钥**: https://open.bigmodel.cn/
-
-### OpenAI兼容配置（可选）
-
-如果您更喜欢使用OpenAI兼容的API，也可以按以下方式配置：
-
-1. 编辑 `aethelum_core_lite/examples/main.py` 文件
-2. 找到OpenAI配置部分
-3. 填写您的OpenAI API密钥：`api_key="sk-your-api-key-here"`
-4. 重新运行程序
-
-💡 **获取OpenAI API密钥**: https://platform.openai.com/api-keys
+**注意**：所有示例使用 **Mock AI 服务**，不需要真实 API keys，开箱即用！
 
 ### 独立运行示例
 
-如果您已经配置好AI客户端（智谱AI或OpenAI兼容），也可以直接运行各个示例：
+您也可以直接运行各个示例：
 
 ```bash
 # 基础示例（简单演示）
 python -m aethelum_core_lite.examples.basic_example
 
-# 内容安全审查示例（可选审核流程）
-python -m aethelum_core_lite.examples.moral_audit_example
-
-# 高级多线程示例
+# 高级示例（多Agent、Hook、性能监控）
 python -m aethelum_core_lite.examples.advanced_example
 
-# 单消息示例
+# 单消息示例（等待响应完成）
 python -m aethelum_core_lite.examples.single_example
+
+# 内容安全审查示例（完整审核流程）
+python -m aethelum_core_lite.examples.moral_audit_example
+
+# 批量处理示例
+python -m aethelum_core_lite.examples.batch_processing_example
+
+# 自定义Hook示例
+python -m aethelum_core_lite.examples.custom_hook_example
+
+# 性能演示
+python -m aethelum_core_lite.examples.performance_demo
 ```
 
-注意：ProtoBuf编译仅在需要使用ProtoBuf功能时才需要
+### 非交互模式（CI/CD）
+
+```bash
+# 设置环境变量启用非交互模式
+export AETHELUM_NONINTERACTIVE=1
+
+# 或在 CI 环境中自动启用
+export CI=1
+
+# 运行示例（不会阻塞等待输入）
+python -m aethelum_core_lite.examples.main
+```
 
 ## 📋 示例说明
 
@@ -72,9 +65,10 @@ python -m aethelum_core_lite.examples.single_example
 
 **功能演示：**
 - 模拟树神经系统的通信框架的基本使用
-- 灵活的消息路由和处理流程
-- 简单的消息传递流程
-- Agent工作原理展示
+- 神经脉冲消息传递
+- 队列管理和 Worker 处理
+- 并发消息处理
+- 自动响应收集
 
 **适用场景：**
 - 初次接触框架
@@ -82,65 +76,114 @@ python -m aethelum_core_lite.examples.single_example
 - 学习核心概念
 
 **前置要求：**
-- ✅ AI客户端配置（智谱AI或OpenAI兼容）
+- ✅ 无需配置（使用 Mock AI）
 
-### 2. 内容安全审查示例 (`moral_audit_example.py`)
+---
 
-**功能演示：**
-- 可选的内容安全审查流程示例
-- AI驱动的智能内容检测
-- 违规类型的自动识别
-- 智能拒绝回复生成
-
-**适用场景：**
-- 了解审核流程示例
-- 学习内容审查实现
-- 测试AI集成（智谱AI或OpenAI兼容）
-
-**前置要求：**
-- ✅ AI客户端配置（智谱AI或OpenAI兼容）
-- ✅ 相应的API密钥
-
-**注意：** 此示例展示的是可选的审核流程，不是框架的强制要求
-
-### 3. 高级多线程示例 (`advanced_example.py`)
+### 2. 高级示例 (`advanced_example.py`)
 
 **功能演示：**
-- 多个业务Agent协同工作
-- 并发LLM处理模拟
+- 多个业务 Agent 协同工作
+- 优先级队列处理
+- 自定义 Hook 机制
 - 性能监控和指标收集
-- RAG增强处理
-- 自动响应收集和排序
-- 高级并发特性
+- 错误处理和重试机制
+- 批量消息处理
 
 **适用场景：**
 - 生产环境集成参考
-- 学习多线程处理
-- 了解完整安全流程
-- 性能测试
+- 学习高级特性
+- 性能测试和优化
 
 **前置要求：**
-- ✅ AI客户端配置（智谱AI或OpenAI兼容）
-- ✅ 相应的API密钥
-- ✅ ProtoBuf编译（protobuf_schema.proto，仅在使用ProtoBuf功能时需要）
+- ✅ 无需配置（使用 Mock AI）
 
-### 4. 单消息示例 (`single_example.py`)
+---
+
+### 3. 单消息示例 (`single_example.py`)
 
 **功能演示：**
 - 简单的端到端流程
 - 等待响应完成
 - 基本的消息处理流程
-- 简化的业务逻辑
+- 内容审核集成
 
 **适用场景：**
-- 初次接触框架
-- 理解基本架构
-- 学习核心概念
+- 理解完整流程
 - 测试基本功能
+- 学习审核机制
 
 **前置要求：**
-- ✅ AI客户端配置（智谱AI或OpenAI兼容）
-- ✅ 相应的API密钥
+- ✅ 无需配置（使用 Mock AI）
+
+---
+
+### 4. 内容安全审查示例 (`moral_audit_example.py`)
+
+**功能演示：**
+- 完整的审核流程实现（输入审核和输出审核）
+- 智能违规类型识别
+- 自动拒绝回复生成
+- 多线程并发审查
+- 审查统计和性能分析
+
+**适用场景：**
+- 了解审核流程实现
+- 学习内容审查
+- 测试安全特性
+
+**前置要求：**
+- ✅ 无需配置（使用 Mock AI）
+
+**注意：** 此示例展示的是可选的审核流程，不是框架的强制要求
+
+---
+
+### 5. 批量处理示例 (`batch_processing_example.py`)
+
+**功能演示：**
+- 批量消息发送
+- 并发处理优化
+- 进度跟踪
+- 结果汇总和统计
+
+**适用场景：**
+- 大规模数据处理
+- 批量任务调度
+- 性能基准测试
+
+---
+
+### 6. 自定义Hook示例 (`custom_hook_example.py`)
+
+**功能演示：**
+- Logging Hook - 详细日志
+- Validation Hook - 数据验证
+- Transform Hook - 内容转换
+- Cache Hook - 结果缓存
+- Metrics Hook - 指标收集
+
+**适用场景：**
+- 学习 Hook 开发
+- 自定义扩展功能
+- 集成监控系统
+
+---
+
+### 7. 性能演示 (`performance_demo.py`)
+
+**功能演示：**
+- 吞吐量测试
+- 并发性能测试
+- 延迟分析
+- 资源使用监控
+
+**适用场景：**
+- 性能基准测试
+- 容量规划
+- 瓶颈分析
+
+---
 
 ## 核心概念说明
 
@@ -158,9 +201,10 @@ python -m aethelum_core_lite.examples.single_example
 ### 突触队列 (SynapticQueue)
 
 突触队列是神经元间的连接点，基于 Python `queue.Queue` 实现：
-- 线程安全的 FIFO 队列
+- 线程安全的优先级队列
 - 支持容量限制和统计信息
 - 自动添加队列元数据
+- 可选的 WAL 持久化
 
 ### 轴突工作器 (AxonWorker)
 
@@ -174,9 +218,70 @@ python -m aethelum_core_lite.examples.single_example
 
 神经胞体路由器是整个系统的核心：
 - 管理队列和工作器的生命周期
-- 提供 `activate()` 方法激活整个神经系统
+- 提供 `auto_setup()` 方法自动配置系统
 - 支持灵活的消息路由流程
 - 允许自定义业务逻辑处理
+
+---
+
+## Mock AI 服务
+
+所有示例使用 `MockAIClient`，不依赖真实 API：
+
+### 特性
+
+- ✅ 模拟审核结果（基于内容长度判断安全性）
+- ✅ 模拟处理延迟（可配置）
+- ✅ 模拟响应生成
+- ✅ 统计信息收集
+
+### 使用示例
+
+```python
+from aethelum_core_lite.examples.mock_ai_service import MockAIClient
+
+# 创建 Mock 客户端
+mock_ai = MockAIClient(response_delay=0.05)
+
+# 内容审核
+audit_result = mock_ai.audit_content("测试内容")
+# 返回: {"safe": True, "result": "审核通过", "confidence": 0.95, ...}
+
+# 内容处理
+process_result = mock_ai.process_content("输入内容")
+# 返回: {"success": True, "result": "已处理您的请求", ...}
+
+# 对话补全
+response = mock_ai.chat_completion([{"role": "user", "content": "你好"}])
+# 返回: "您好！很高兴为您服务..."
+
+# 获取统计
+stats = mock_ai.get_stats()
+# 返回: {"total_requests": 10, "avg_delay": 0.05, ...}
+```
+
+### 集成真实 AI 服务（可选）
+
+如需使用真实 AI 服务，可以轻松替换 Mock AI：
+
+```python
+# 替换为真实客户端
+from openai import OpenAI
+
+class RealAIClient:
+    def __init__(self, api_key: str):
+        self.client = OpenAI(api_key=api_key)
+
+    def audit_content(self, content: str) -> dict:
+        # 调用真实 API
+        response = self.client.chat.completions.create(
+            model="gpt-4",
+            messages=[{"role": "user", "content": f"审核: {content}"}]
+        )
+        return {"safe": True, "result": response.choices[0].message.content}
+```
+
+---
 
 ## 安全流程设计
 
@@ -187,7 +292,7 @@ AethelumCoreLite 提供灵活的消息处理流程，支持可选的安全审核
 用户输入 → Q_PROCESS_INPUT → [业务处理] → Q_RESPONSE_SINK → 用户响应
 ```
 
-**可选审核流程示例**:
+**可选审核流程**:
 ```
 用户输入 → Q_AUDIT_INPUT → Q_AUDITED_INPUT → [业务处理] → Q_AUDIT_OUTPUT → Q_RESPONSE_SINK → 用户响应
 ```
@@ -197,6 +302,8 @@ AethelumCoreLite 提供灵活的消息处理流程，支持可选的安全审核
 2. **可选审核**: 提供审核流程示例，可根据需要启用
 3. **标准处理**: 默认使用简化的标准处理流程
 4. **自定义扩展**: 支持注册自定义 Hook 实现特定需求
+
+---
 
 ## 树神经体系命名
 
@@ -209,6 +316,8 @@ AethelumCoreLite 提供灵活的消息处理流程，支持可选的安全审核
 | AxonWorker | 轴突 | 传递神经信号的纤维 |
 | NeuralImpulse | 神经脉冲 | 神经元间的信息单位 |
 
+---
+
 ## 扩展开发
 
 ### 创建自定义 Hook
@@ -217,13 +326,16 @@ AethelumCoreLite 提供灵活的消息处理流程，支持可选的安全审核
 from aethelum_core_lite.hooks.base_hook import BaseHook
 
 class MyCustomHook(BaseHook):
+    def __init__(self, hook_name: str):
+        super().__init__(hook_name)
+
     def process(self, impulse: NeuralImpulse, source_queue: str) -> NeuralImpulse:
         # 自定义处理逻辑
         impulse.metadata['processed_by'] = 'MyCustomHook'
         return impulse
 
 # 注册 Hook
-router.register_hook("MY_QUEUE", MyCustomHook("MyHook").process)
+router.register_hook("MY_QUEUE", "pre_process", MyCustomHook("MyHook").process)
 ```
 
 ### 实现业务 Agent
@@ -232,17 +344,19 @@ router.register_hook("MY_QUEUE", MyCustomHook("MyHook").process)
 def my_business_logic(impulse: NeuralImpulse, source_queue: str) -> NeuralImpulse:
     # 处理业务逻辑
     response = process_user_input(impulse.content)
-    impulse.content = response
+    impulse.set_text_content(response)
 
     # 路由到下一步
-    impulse.reroute_to("Q_AUDIT_OUTPUT")
+    impulse.reroute_to("Q_RESPONSE_SINK")
     impulse.update_source("MyBusinessAgent")
 
     return impulse
 
 # 注册业务逻辑
-router.register_hook("Q_AUDITED_INPUT", my_business_logic)
+router.register_hook("Q_AUDITED_INPUT", "pre_process", my_business_logic)
 ```
+
+---
 
 ## 最佳实践
 
@@ -251,15 +365,17 @@ router.register_hook("Q_AUDITED_INPUT", my_business_logic)
 3. **性能监控**: 利用统计信息监控系统性能
 4. **资源管理**: 适当配置工作器数量和队列大小
 5. **日志记录**: 启用适当的日志记录以便调试
-6. **AI客户端**: 推荐使用智谱AI客户端以获得最佳体验
+6. **线程安全**: 使用锁保护共享数据
+
+---
 
 ## 故障排除
 
 ### 常见问题
 
-1. **路由器激活失败**
-   - 检查是否创建了 Q_RESPONSE_SINK 队列
-   - 确保所有强制性队列都已创建
+1. **示例运行失败**
+   - 确保已安装所有依赖：`pip install -r requirements/base.txt`
+   - 检查 Python 版本（需要 3.8+）
 
 2. **消息丢失**
    - 检查 Hook 函数是否返回了 NeuralImpulse 对象
@@ -286,8 +402,11 @@ queue_sizes = router.get_queue_sizes()
 print(queue_sizes)
 ```
 
+---
+
 ## 更多资源
 
+- [主 README](../../README.md)
 - [设计文档](../../AethelumCoreLite_v0.1.md)
 - [API 文档](../core/)
 - [工具函数](../utils/)

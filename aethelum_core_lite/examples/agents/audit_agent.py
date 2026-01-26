@@ -83,14 +83,14 @@ class AuditAgent:
 
         Args:
             agent_name: Agent名称
-            ai_client: AI客户端实例（支持OpenAI或智谱AI客户端）
+            ai_client: AI客户端实例
         """
         self.agent_name = agent_name
         self.logger = logging.getLogger(f"audit.{agent_name}")
         self.ai_client = ai_client
 
         if not self.ai_client:
-            raise RuntimeError("AuditAgent必须配置AI客户端（OpenAI或智谱AI）")
+            raise RuntimeError("AuditAgent必须配置AI客户端")
 
         self.logger.info("AuditAgent初始化完成")
 
@@ -240,7 +240,7 @@ class AuditAgent:
 
     def generate_rejection_response(self, violation_type: str) -> str:
         """
-        使用陪伴型AI模板和OpenAI客户端生成拒绝回复
+        使用陪伴型AI模板生成拒绝回复
 
         Args:
             violation_type: 违规类型
@@ -284,7 +284,7 @@ class AuditAgent:
 
     def audit_content(self, impulse: NeuralImpulse) -> AuditStatus:
         """
-        使用OpenAI客户端进行内容审查
+        使用AI客户端进行内容审查
 
         Args:
             impulse: 神经脉冲

@@ -21,7 +21,6 @@ keywords = [
     "communication",
     "agent",
     "protobuf",
-    "openai",
     "safety"
 ]
 classifiers = [
@@ -40,7 +39,6 @@ classifiers = [
 ]
 requires-python = ">=3.8"
 dependencies = [
-    "openai>=1.0.0",
     "requests>=2.25.0",
     "protobuf>=3.20.0",
 ]

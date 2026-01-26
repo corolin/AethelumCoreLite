@@ -329,9 +329,9 @@ class NeuralSomaRouter:
         hooks = self.get_hooks(queue_name, hook_type)
         if not hooks:
             return impulse
-            
+
         start_time = time.time()
-        
+
         try:
             for hook in hooks:
                 impulse = hook(impulse, queue_name)
@@ -342,19 +342,20 @@ class NeuralSomaRouter:
             if queue_name != 'Q_ERROR_HANDLER':
                 self._send_to_queue('Q_ERROR_HANDLER', impulse)
         finally:
-            # 记录Hook执行时间
+            # 记录Hook执行时间（线程安全）
             execution_time = time.time() - start_time
-            if queue_name not in self._performance_metrics['hook_execution_times']:
-                self._performance_metrics['hook_execution_times'][queue_name] = {}
-            if hook_type not in self._performance_metrics['hook_execution_times'][queue_name]:
-                self._performance_metrics['hook_execution_times'][queue_name][hook_type] = []
-            
-            # 只保留最近100次执行时间
-            times_list = self._performance_metrics['hook_execution_times'][queue_name][hook_type]
-            times_list.append(execution_time)
-            if len(times_list) > 100:
-                times_list.pop(0)
-                
+            with self._lock:
+                if queue_name not in self._performance_metrics['hook_execution_times']:
+                    self._performance_metrics['hook_execution_times'][queue_name] = {}
+                if hook_type not in self._performance_metrics['hook_execution_times'][queue_name]:
+                    self._performance_metrics['hook_execution_times'][queue_name][hook_type] = []
+
+                # 只保留最近100次执行时间
+                times_list = self._performance_metrics['hook_execution_times'][queue_name][hook_type]
+                times_list.append(execution_time)
+                if len(times_list) > 100:
+                    times_list.pop(0)
+
         return impulse
 
     def start_workers(

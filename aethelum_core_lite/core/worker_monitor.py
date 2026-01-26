@@ -154,10 +154,12 @@ class WorkerMonitor:
         # 指标存储
         self._metrics_history: Dict[str, deque] = {}
         self._current_metrics: Dict[str, MetricValue] = {}
-        
+        self._metrics_lock = threading.RLock()  # 保护指标数据
+
         # 告警存储
         self._active_alerts: Dict[str, Alert] = {}
         self._alert_history: List[Alert] = []
+        self._alerts_lock = threading.RLock()   # 保护告警数据
         
         # 阈值规则
         self._threshold_rules: Dict[str, ThresholdRule] = {}
@@ -463,15 +465,15 @@ class WorkerMonitor:
             description="调度器活跃工作器数量"
         )
     
-    def _record_metric(self, 
-                      name: str, 
-                      value: float, 
+    def _record_metric(self,
+                      name: str,
+                      value: float,
                       metric_type: MetricType,
                       labels: Dict[str, str] = None,
                       unit: str = "",
                       description: str = ""):
         """记录指标
-        
+
         Args:
             name: 指标名称
             value: 指标值
@@ -481,7 +483,7 @@ class WorkerMonitor:
             description: 描述
         """
         timestamp = time.time()
-        
+
         # 创建指标值
         metric = MetricValue(
             name=name,
@@ -492,16 +494,17 @@ class WorkerMonitor:
             unit=unit,
             description=description
         )
-        
-        # 更新当前指标
-        self._current_metrics[name] = metric
-        
-        # 添加到历史记录
-        if name not in self._metrics_history:
-            self._metrics_history[name] = deque(maxlen=self.max_metrics_history)
-        
-        self._metrics_history[name].append(metric)
-        
+
+        # 更新当前指标和历史记录（线程安全）
+        with self._metrics_lock:
+            self._current_metrics[name] = metric
+
+            # 添加到历史记录
+            if name not in self._metrics_history:
+                self._metrics_history[name] = deque(maxlen=self.max_metrics_history)
+
+            self._metrics_history[name].append(metric)
+
         # 更新统计信息
         self._stats.total_metrics_collected += 1
         self._stats.last_collection_time = timestamp
@@ -583,59 +586,66 @@ class WorkerMonitor:
     def _check_threshold_rules(self):
         """检查阈值规则"""
         current_time = time.time()
-        
+
         for rule_id, rule in self._threshold_rules.items():
             if not rule.enabled:
                 continue
-            
+
             # 检查冷却期
             if current_time - rule.last_triggered < rule.cooldown_period:
                 continue
-            
-            # 获取指标值
-            if rule.metric_name not in self._current_metrics:
-                continue
-            
-            metric = self._current_metrics[rule.metric_name]
-            
-            # 检查阈值
-            triggered = False
-            
-            if rule.operator == ">" and metric.value > rule.threshold:
-                triggered = True
-            elif rule.operator == ">=" and metric.value >= rule.threshold:
-                triggered = True
-            elif rule.operator == "<" and metric.value < rule.threshold:
-                triggered = True
-            elif rule.operator == "<=" and metric.value <= rule.threshold:
-                triggered = True
-            elif rule.operator == "==" and metric.value == rule.threshold:
-                triggered = True
-            elif rule.operator == "!=" and metric.value != rule.threshold:
-                triggered = True
-            
+
+            # 线程安全地获取指标值
+            with self._metrics_lock:
+                if rule.metric_name not in self._current_metrics:
+                    continue
+
+                metric = self._current_metrics[rule.metric_name]
+
+                # 检查阈值
+                triggered = False
+
+                if rule.operator == ">" and metric.value > rule.threshold:
+                    triggered = True
+                elif rule.operator == ">=" and metric.value >= rule.threshold:
+                    triggered = True
+                elif rule.operator == "<" and metric.value < rule.threshold:
+                    triggered = True
+                elif rule.operator == "<=" and metric.value <= rule.threshold:
+                    triggered = True
+                elif rule.operator == "==" and metric.value == rule.threshold:
+                    triggered = True
+                elif rule.operator == "!=" and metric.value != rule.threshold:
+                    triggered = True
+
+                if triggered:
+                    # 创建告警
+                    worker_id = metric.labels.get("worker_id")
+
+                    # 复制需要的值，避免在锁外使用可能被修改的对象
+                    metric_value = metric.value
+                    metric_labels = metric.labels.copy()
+
+            # 在锁外创建告警，避免死锁
             if triggered:
-                # 创建告警
-                worker_id = metric.labels.get("worker_id")
-                
                 self._create_alert(
                     level=rule.level,
                     title=f"阈值告警: {rule.description}",
-                    message=f"指标 {rule.metric_name} 值 {metric.value} {rule.operator} 阈值 {rule.threshold}",
+                    message=f"指标 {rule.metric_name} 值 {metric_value} {rule.operator} 阈值 {rule.threshold}",
                     source="threshold_rule",
                     worker_id=worker_id,
                     metric_name=rule.metric_name,
-                    current_value=metric.value,
+                    current_value=metric_value,
                     threshold=rule.threshold,
                     metadata={"rule_id": rule_id, "operator": rule.operator}
                 )
-                
+
                 # 更新规则触发时间
                 rule.last_triggered = current_time
     
-    def _create_alert(self, 
-                     level: AlertLevel, 
-                     title: str, 
+    def _create_alert(self,
+                     level: AlertLevel,
+                     title: str,
                      message: str,
                      source: str,
                      worker_id: Optional[str] = None,
@@ -644,7 +654,7 @@ class WorkerMonitor:
                      threshold: Optional[float] = None,
                      metadata: Dict[str, Any] = None):
         """创建告警
-        
+
         Args:
             level: 告警级别
             title: 告警标题
@@ -658,7 +668,7 @@ class WorkerMonitor:
         """
         alert_id = str(uuid.uuid4())
         timestamp = time.time()
-        
+
         alert = Alert(
             alert_id=alert_id,
             level=level,
@@ -672,17 +682,18 @@ class WorkerMonitor:
             threshold=threshold,
             metadata=metadata or {}
         )
-        
-        # 添加到活跃告警
-        self._active_alerts[alert_id] = alert
-        
-        # 添加到历史记录
-        self._alert_history.append(alert)
-        
-        # 更新统计信息
-        self._stats.total_alerts_generated += 1
-        self._stats.active_alerts = len(self._active_alerts)
-        
+
+        # 添加到活跃告警和历史记录（线程安全）
+        with self._alerts_lock:
+            self._active_alerts[alert_id] = alert
+
+            # 添加到历史记录
+            self._alert_history.append(alert)
+
+            # 更新统计信息
+            self._stats.total_alerts_generated += 1
+            self._stats.active_alerts = len(self._active_alerts)
+
         # 通知告警回调
         self._notify_alert_callbacks(alert)
     
@@ -700,18 +711,22 @@ class WorkerMonitor:
     
     def _process_auto_recovery(self):
         """处理自动恢复"""
-        for alert_id, alert in list(self._active_alerts.items()):
+        # 获取活跃告警的快照，避免在锁定状态下调用恢复回调
+        with self._alerts_lock:
+            active_alerts = list(self._active_alerts.items())
+
+        for alert_id, alert in active_alerts:
             # 只处理错误和严重级别的告警
             if alert.level not in [AlertLevel.ERROR, AlertLevel.CRITICAL]:
                 continue
-            
+
             # 只处理工作器相关的告警
             if not alert.worker_id:
                 continue
-            
+
             # 尝试自动恢复
             recovered = False
-            
+
             for callback in self._recovery_callbacks:
                 try:
                     if callback(alert.worker_id, alert_id):
@@ -719,19 +734,22 @@ class WorkerMonitor:
                         break
                 except Exception as e:
                     print(f"Error in recovery callback: {e}")
-            
+
             if recovered:
-                # 标记告警为已解决
-                alert.resolved = True
-                alert.resolved_timestamp = time.time()
-                
-                # 从活跃告警中移除
-                del self._active_alerts[alert_id]
-                
-                # 更新统计信息
-                self._stats.active_alerts = len(self._active_alerts)
-                self._stats.resolved_alerts += 1
-                
+                # 标记告警为已解决并从活跃告警中移除（线程安全）
+                with self._alerts_lock:
+                    if alert_id in self._active_alerts:
+                        alert_to_resolve = self._active_alerts[alert_id]
+                        alert_to_resolve.resolved = True
+                        alert_to_resolve.resolved_timestamp = time.time()
+
+                        # 从活跃告警中移除
+                        del self._active_alerts[alert_id]
+
+                        # 更新统计信息
+                        self._stats.active_alerts = len(self._active_alerts)
+                        self._stats.resolved_alerts += 1
+
                 print(f"Auto-recovered worker {alert.worker_id} for alert {alert_id}")
     
     def _update_stats(self):
@@ -778,64 +796,69 @@ class WorkerMonitor:
     
     def get_active_alerts(self) -> Dict[str, Alert]:
         """获取活跃告警
-        
+
         Returns:
             Dict[str, Alert]: 活跃告警字典
         """
-        return self._active_alerts.copy()
+        with self._alerts_lock:
+            return self._active_alerts.copy()
     
     def get_alert_history(self, limit: int = 100) -> List[Alert]:
         """获取告警历史
-        
+
         Args:
             limit: 返回的最大告警数量
-            
+
         Returns:
             List[Alert]: 告警历史列表
         """
-        return self._alert_history[-limit:]
+        with self._alerts_lock:
+            return self._alert_history[-limit:]
     
     def get_current_metrics(self) -> Dict[str, MetricValue]:
         """获取当前指标
-        
+
         Returns:
             Dict[str, MetricValue]: 当前指标字典
         """
-        return self._current_metrics.copy()
+        with self._metrics_lock:
+            return self._current_metrics.copy()
     
     def get_metric_history(self, metric_name: str, limit: int = 100) -> List[MetricValue]:
         """获取指标历史
-        
+
         Args:
             metric_name: 指标名称
             limit: 返回的最大指标数量
-            
+
         Returns:
             List[MetricValue]: 指标历史列表
         """
-        if metric_name not in self._metrics_history:
-            return []
-        
-        history = list(self._metrics_history[metric_name])
-        return history[-limit:]
+        with self._metrics_lock:
+            if metric_name not in self._metrics_history:
+                return []
+
+            history = list(self._metrics_history[metric_name])
+            return history[-limit:]
     
     def resolve_alert(self, alert_id: str):
         """解决告警
-        
+
         Args:
             alert_id: 告警ID
         """
-        if alert_id in self._active_alerts:
-            alert = self._active_alerts[alert_id]
-            alert.resolved = True
-            alert.resolved_timestamp = time.time()
-            
-            # 从活跃告警中移除
-            del self._active_alerts[alert_id]
-            
-            # 更新统计信息
-            self._stats.active_alerts = len(self._active_alerts)
-            self._stats.resolved_alerts += 1
+        with self._alerts_lock:
+            if alert_id in self._active_alerts:
+                alert = self._active_alerts[alert_id]
+                alert.resolved = True
+                alert.resolved_timestamp = time.time()
+
+                # 从活跃告警中移除
+                del self._active_alerts[alert_id]
+
+                # 更新统计信息
+                self._stats.active_alerts = len(self._active_alerts)
+                self._stats.resolved_alerts += 1
     
     def start(self):
         """启动监控器"""
@@ -882,24 +905,28 @@ class WorkerMonitor:
     
     def export_metrics(self, file_path: str):
         """导出指标到文件
-        
+
         Args:
             file_path: 文件路径
         """
         try:
+            # 线程安全地获取指标数据
+            with self._metrics_lock:
+                current_metrics_copy = {
+                    name: {
+                        "value": metric.value,
+                        "timestamp": metric.timestamp,
+                        "metric_type": metric.metric_type.value,
+                        "labels": metric.labels,
+                        "unit": metric.unit,
+                        "description": metric.description
+                    }
+                    for name, metric in self._current_metrics.items()
+                }
+
             with open(file_path, 'w') as f:
                 json.dump({
-                    "current_metrics": {
-                        name: {
-                            "value": metric.value,
-                            "timestamp": metric.timestamp,
-                            "metric_type": metric.metric_type.value,
-                            "labels": metric.labels,
-                            "unit": metric.unit,
-                            "description": metric.description
-                        }
-                        for name, metric in self._current_metrics.items()
-                    },
+                    "current_metrics": current_metrics_copy,
                     "stats": {
                         "monitor_id": self._stats.monitor_id,
                         "name": self._stats.name,
@@ -913,7 +940,7 @@ class WorkerMonitor:
                         "monitored_workers": self._stats.monitored_workers
                     }
                 }, f, indent=2)
-            
+
             print(f"Metrics exported to {file_path}")
         except Exception as e:
             print(f"Error exporting metrics: {e}")

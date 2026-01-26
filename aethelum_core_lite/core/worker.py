@@ -116,6 +116,9 @@ class AxonWorker(threading.Thread):
             state=self._state
         )
 
+        # 统计信息锁（保护 _stats 的并发访问）
+        self._stats_lock = threading.Lock()
+
         # 日志记录器
         import logging
         self.logger = logging.getLogger(f"AxonWorker.{name}")
@@ -368,25 +371,26 @@ class AxonWorker(threading.Thread):
     
     def _update_stats(self, processing_time: float, success: bool):
         """更新统计信息
-        
+
         Args:
             processing_time: 处理时间
             success: 是否成功
         """
-        if success:
-            self._stats.processed_messages += 1
-        else:
-            self._stats.failed_messages += 1
-        
-        self._stats.total_processing_time += processing_time
-        total_messages = self._stats.processed_messages + self._stats.failed_messages
-        
-        if total_messages > 0:
-            self._stats.average_processing_time = self._stats.total_processing_time / total_messages
-            self._stats.success_rate = (self._stats.processed_messages / total_messages) * 100
-        
-        # 更新运行时间
-        self._stats.uptime = time.time() - self._stats.start_time
+        with self._stats_lock:
+            if success:
+                self._stats.processed_messages += 1
+            else:
+                self._stats.failed_messages += 1
+
+            self._stats.total_processing_time += processing_time
+            total_messages = self._stats.processed_messages + self._stats.failed_messages
+
+            if total_messages > 0:
+                self._stats.average_processing_time = self._stats.total_processing_time / total_messages
+                self._stats.success_rate = (self._stats.processed_messages / total_messages) * 100
+
+            # 更新运行时间
+            self._stats.uptime = time.time() - self._stats.start_time
     
     def pause(self):
         """暂停工作器"""
@@ -411,17 +415,37 @@ class AxonWorker(threading.Thread):
     
     def get_stats(self) -> WorkerStats:
         """获取工作器统计信息
-        
+
         Returns:
             WorkerStats: 工作器统计信息
         """
-        # 更新运行时间
-        self._stats.uptime = time.time() - self._stats.start_time
-        
-        # 更新状态
-        self._stats.state = self._state
-        
-        return self._stats
+        with self._stats_lock:
+            # 更新运行时间
+            self._stats.uptime = time.time() - self._stats.start_time
+
+            # 更新状态
+            self._stats.state = self._state
+
+            # 返回副本而非引用，防止外部修改
+            return WorkerStats(
+                worker_id=self._stats.worker_id,
+                name=self._stats.name,
+                state=self._stats.state,
+                start_time=self._stats.start_time,
+                last_activity=self._stats.last_activity,
+                processed_messages=self._stats.processed_messages,
+                failed_messages=self._stats.failed_messages,
+                total_processing_time=self._stats.total_processing_time,
+                average_processing_time=self._stats.average_processing_time,
+                success_rate=self._stats.success_rate,
+                error_counts=dict(self._stats.error_counts),
+                last_error=self._stats.last_error,
+                last_error_time=self._stats.last_error_time,
+                recovery_attempts=self._stats.recovery_attempts,
+                consecutive_failures=self._stats.consecutive_failures,
+                health_score=self._stats.health_score,
+                uptime=self._stats.uptime
+            )
     
     def get_state(self) -> WorkerState:
         """获取工作器状态

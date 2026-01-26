@@ -1,0 +1,4 @@
+# AethelumCoreLite 性能优化依赖（可选）
+# 生成锁文件命令: pip-compile requirements/performance.in --output-file=requirements/performance-lock.txt
+
+msgpack>=1.0.0
