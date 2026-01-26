@@ -21,14 +21,25 @@ pip install aethelum-core-lite
 
 ### 开发环境安装
 ```bash
+# 克隆仓库
 git clone https://github.com/aethelum/aethelum-core-lite.git
 cd aethelum-core-lite
-pip install -e ".[dev]"
+
+# 安装核心依赖
+pip install -r requirements/base.txt
+
+# 安装开发依赖（包含核心依赖）
+pip install -r requirements/dev.txt
 ```
 
 ### 完整安装（包含开发工具和文档）
 ```bash
+# 方式1：使用 pyproject.toml
 pip install -e ".[dev,docs]"
+
+# 方式2：使用 requirements 文件
+pip install -r requirements/dev.txt
+pip install -r requirements/docs.txt
 ```
 
 ### 性能优化（推荐）
@@ -36,13 +47,17 @@ pip install -e ".[dev,docs]"
 为了获得最佳的持久化性能，建议安装 msgpack：
 
 ```bash
+# 方式1：使用 pyproject.toml 可选依赖
+pip install -e ".[performance]"
+
+# 方式2：直接安装 msgpack
 # Ubuntu/Debian
 sudo apt-get install python3-msgpack
 
 # macOS
 brew install python-msgpack
 
-# 或使用 pip
+# 使用 pip
 pip install msgpack
 ```
 

@@ -57,6 +57,12 @@ docs = [
     "sphinx>=4.5.0",
     "sphinx-rtd-theme>=1.0.0",
 ]
+performance = [
+    "msgpack>=1.0.0",
+]
+all = [
+    "aethelum-core-lite[dev,docs,performance]",
+]
 
 [project.urls]
 Homepage = "https://github.com/aethelum/aethelum-core-lite"
