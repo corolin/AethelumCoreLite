@@ -197,3 +197,9 @@ secrets.json
 .claude/.history/
 .docs/
 .roocode/
+
+# Issue tracking and completion reports (local only)
+issue.md
+issue_fix_plan.md
+issue_completion_report.md
+.trae/
