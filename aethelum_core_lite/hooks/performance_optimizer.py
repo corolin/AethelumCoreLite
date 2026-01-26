@@ -14,8 +14,14 @@ from typing import Any, Dict, List, Optional, Callable, Union, Tuple
 from concurrent.futures import ThreadPoolExecutor, Future, as_completed
 from dataclasses import dataclass, field
 from collections import defaultdict, deque
-import psutil
 import gc
+
+# psutil 是可选依赖
+try:
+    import psutil
+    PSUTIL_AVAILABLE = True
+except ImportError:
+    PSUTIL_AVAILABLE = False
 
 from .base_hook import BaseHook, AsyncHook
 
@@ -96,6 +102,18 @@ class PerformanceMonitor:
     
     def get_system_performance(self) -> Dict[str, Any]:
         """获取系统性能信息"""
+        if not PSUTIL_AVAILABLE:
+            # psutil 不可用，返回基础信息
+            return {
+                'cpu_percent': 0.0,
+                'memory_info': {},
+                'memory_percent': 0.0,
+                'threads': threading.active_count(),
+                'open_files': 0,
+                'timestamp': time.time(),
+                'note': 'psutil 不可用，返回基础信息'
+            }
+
         process = psutil.Process()
         return {
             'cpu_percent': process.cpu_percent(),
@@ -441,6 +459,11 @@ class PerformanceOptimizer:
     
     def _get_memory_usage(self) -> float:
         """获取当前内存使用量"""
+        if not PSUTIL_AVAILABLE:
+            # psutil 不可用，返回估算值
+            import resource
+            return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+
         try:
             process = psutil.Process()
             return process.memory_info().rss
