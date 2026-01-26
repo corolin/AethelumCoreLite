@@ -55,6 +55,17 @@ class NeuralSomaRouter:
         'Q_ERROR': {'priority': QueuePriority.CRITICAL, 'description': '错误处理队列'}
     }
 
+    # 队列默认优先级
+    QUEUE_PRIORITIES = {
+        'Q_AUDIT_INPUT': QueuePriority.HIGH,
+        'Q_AUDIT_OUTPUT': QueuePriority.HIGH,
+        'Q_RESPONSE_SINK': QueuePriority.CRITICAL,
+        'Q_DONE': QueuePriority.NORMAL,
+        'Q_ERROR': QueuePriority.CRITICAL,
+        'Q_PROCESS_INPUT': QueuePriority.HIGH,
+        'Q_ERROR_HANDLER': QueuePriority.HIGH
+    }
+
     def __init__(self, enable_logging: bool = True):
         """
         初始化神经胞体路由器
@@ -369,42 +380,19 @@ class NeuralSomaRouter:
 
             queue = self._queues[queue_name]
             hooks_list = []
-            
+
             # 如果没有自定义Hook，则使用已注册的Hook
             if not custom_hook and queue_name in self._hooks:
                 # 将字典中的所有Hook函数转换为BaseHook对象
                 for hook_type, hook_functions in self._hooks[queue_name].items():
                     for hook_func in hook_functions:
-                        # 创建一个简单的BaseHook适配器
-                        class HookAdapter:
-                            def __init__(self, func, hook_type):
-                                self.func = func
-                                self.hook_type = hook_type
-                                
-                            def before_process(self, impulse):
-                                if self.hook_type == HookType.PRE_PROCESS:
-                                    return self.func(impulse, queue_name)
-                                return impulse
-                                
-                            def after_process(self, impulse):
-                                if self.hook_type == HookType.POST_PROCESS:
-                                    return self.func(impulse, queue_name)
-                                return impulse
-                        
-                        hooks_list.append(HookAdapter(hook_func, hook_type))
+                        # 使用函数式适配器而不是动态创建类
+                        adapter = _create_hook_adapter(hook_func, hook_type, queue_name)
+                        hooks_list.append(adapter)
             elif custom_hook:
-                # 使用自定义Hook
-                class CustomHookAdapter:
-                    def __init__(self, func):
-                        self.func = func
-                        
-                    def before_process(self, impulse):
-                        return self.func(impulse, queue_name)
-                        
-                    def after_process(self, impulse):
-                        return impulse
-                
-                hooks_list.append(CustomHookAdapter(custom_hook))
+                # 使用自定义Hook适配器
+                adapter = _create_custom_hook_adapter(custom_hook, queue_name)
+                hooks_list.append(adapter)
 
             # 创建工作器
             workers = []
@@ -421,7 +409,7 @@ class NeuralSomaRouter:
             if queue_name not in self._workers:
                 self._workers[queue_name] = []
             self._workers[queue_name].extend(workers)
-            
+
             self._stats['total_workers_created'] += num_workers
 
             # 启动工作器
@@ -769,3 +757,66 @@ class NeuralSomaRouter:
         """详细字符串表示"""
         return (f"NeuralSomaRouter(queues={list(self._queues.keys())}, "
                 f"hooks={list(self._hooks.keys())}, active={self._router_active})")
+
+
+# Hook适配器函数（模块级别，避免动态创建类）
+def _create_hook_adapter(hook_func: Callable, hook_type: HookType, queue_name: str):
+    """
+    创建Hook适配器
+
+    Args:
+        hook_func: Hook函数
+        hook_type: Hook类型
+        queue_name: 队列名称
+
+    Returns:
+        BaseHook: Hook适配器实例
+    """
+    from ..hooks.base_hook import BaseHook
+
+    class _HookAdapterImpl(BaseHook):
+        def __init__(self, func, h_type, q_name):
+            super().__init__(f"Adapter_{h_type.value}_{q_name}", enable_logging=False)
+            self.func = func
+            self.hook_type = h_type
+            self.queue_name = q_name
+
+        def before_process(self, impulse):
+            if self.hook_type == HookType.PRE_PROCESS:
+                return self.func(impulse, self.queue_name)
+            return impulse
+
+        def after_process(self, impulse):
+            if self.hook_type == HookType.POST_PROCESS:
+                return self.func(impulse, self.queue_name)
+            return impulse
+
+    return _HookAdapterImpl(hook_func, hook_type, queue_name)
+
+
+def _create_custom_hook_adapter(hook_func: Callable, queue_name: str):
+    """
+    创建自定义Hook适配器
+
+    Args:
+        hook_func: Hook函数
+        queue_name: 队列名称
+
+    Returns:
+        BaseHook: Hook适配器实例
+    """
+    from ..hooks.base_hook import BaseHook
+
+    class _CustomHookAdapterImpl(BaseHook):
+        def __init__(self, func, q_name):
+            super().__init__(f"CustomAdapter_{q_name}", enable_logging=False)
+            self.func = func
+            self.queue_name = q_name
+
+        def before_process(self, impulse):
+            return self.func(impulse, self.queue_name)
+
+        def after_process(self, impulse):
+            return impulse
+
+    return _CustomHookAdapterImpl(hook_func, queue_name)

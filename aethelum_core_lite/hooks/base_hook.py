@@ -6,7 +6,7 @@
 
 import logging
 from abc import ABC, abstractmethod
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Callable
 from ..core.message import NeuralImpulse
 
 
@@ -31,6 +31,10 @@ class BaseHook(ABC):
         self.priority = priority
         self.logger = logging.getLogger(f"hook.{hook_name}")
         self.hook_type = "base"
+
+        # 线程锁，用于统计信息的线程安全更新
+        import threading
+        self._lock = threading.Lock()
 
         # 统计信息
         self._stats = {
@@ -209,7 +213,7 @@ class SimpleHook(BaseHook):
     def __init__(
         self,
         hook_name: str,
-        process_function: callable,
+        process_function: Callable,
         enable_logging: bool = True
     ):
         """
@@ -247,7 +251,7 @@ class FilterHook(BaseHook):
     def __init__(
         self,
         hook_name: str,
-        filter_function: callable,
+        filter_function: Callable,
         drop_on_match: bool = False,
         enable_logging: bool = True
     ):
@@ -289,7 +293,7 @@ class FilterHook(BaseHook):
         return impulse
 
 
-def create_simple_hook(hook_name: str, process_function: callable) -> SimpleHook:
+def create_simple_hook(hook_name: str, process_function: Callable) -> SimpleHook:
     """
     创建简单Hook的便捷函数
 
@@ -303,7 +307,7 @@ def create_simple_hook(hook_name: str, process_function: callable) -> SimpleHook
     return SimpleHook(hook_name, process_function)
 
 
-def create_filter_hook(hook_name: str, filter_function: callable, drop_on_match: bool = False) -> FilterHook:
+def create_filter_hook(hook_name: str, filter_function: Callable, drop_on_match: bool = False) -> FilterHook:
     """
     创建过滤Hook的便捷函数
 
@@ -409,7 +413,7 @@ class ConditionalHook(BaseHook):
     条件Hook - 根据条件决定是否执行
     """
     
-    def __init__(self, hook_name: str, condition_function: callable, 
+    def __init__(self, hook_name: str, condition_function: Callable,
                  target_hook: BaseHook, enable_logging: bool = True, priority: int = 50):
         """
         初始化条件Hook
@@ -542,7 +546,7 @@ class SecurityHook(BaseHook):
         self.security_rules = security_rules or []
         self.blocked_count = 0
     
-    def add_security_rule(self, rule_name: str, rule_function: callable):
+    def add_security_rule(self, rule_name: str, rule_function: Callable):
         """添加安全规则"""
         self.security_rules.append({
             'name': rule_name,
@@ -583,7 +587,7 @@ class SecurityHook(BaseHook):
 
 
 # 便捷函数
-def create_pre_hook(hook_name: str, pre_process_function: callable, 
+def create_pre_hook(hook_name: str, pre_process_function: Callable,
                     enable_logging: bool = True, priority: int = 50) -> PreHook:
     """创建前置Hook的便捷函数"""
     class SimplePreHook(PreHook):
@@ -597,7 +601,7 @@ def create_pre_hook(hook_name: str, pre_process_function: callable,
     return SimplePreHook(hook_name, pre_process_function, enable_logging, priority)
 
 
-def create_post_hook(hook_name: str, post_process_function: callable, 
+def create_post_hook(hook_name: str, post_process_function: Callable,
                      enable_logging: bool = True, priority: int = 50) -> PostHook:
     """创建后置Hook的便捷函数"""
     class SimplePostHook(PostHook):
@@ -611,7 +615,7 @@ def create_post_hook(hook_name: str, post_process_function: callable,
     return SimplePostHook(hook_name, post_process_function, enable_logging, priority)
 
 
-def create_error_hook(hook_name: str, error_handler_function: callable, 
+def create_error_hook(hook_name: str, error_handler_function: Callable,
                       enable_logging: bool = True, priority: int = 10) -> ErrorHook:
     """创建错误Hook的便捷函数"""
     class SimpleErrorHook(ErrorHook):

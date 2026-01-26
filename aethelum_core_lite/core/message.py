@@ -123,7 +123,7 @@ class NeuralImpulse:
         self.source_agent = new_source
         self.add_to_history(new_source)
 
-    def reroute_to(self, new_intent: str) -> None:
+    def reroute_to_queue(self, new_intent: str) -> None:
         """重新路由到指定队列"""
         self.action_intent = new_intent
 
@@ -830,19 +830,21 @@ class NeuralImpulse:
 
         return compressed_size / original_size if original_size > 0 else 1.0
         
-    def reroute_to(self, new_source_agent: str) -> None:
+    reroute_to = reroute_to_queue  # 保持向后兼容，别名为 reroute_to_queue
+
+    def change_source_agent(self, new_source_agent: str) -> None:
         """
-        重新路由神经脉冲到新的源代理
-        
+        更改源代理并记录路由历史
+
         Args:
             new_source_agent: 新的源代理名称
         """
         # 保存原始源代理到路由历史
         if self.source_agent not in self.routing_history:
             self.routing_history.append(self.source_agent)
-        
+
         # 更新源代理
         self.source_agent = new_source_agent
-        
+
         # 添加路由记录
-        self.routing_history.append(f"rerouted_to:{new_source_agent}")
+        self.routing_history.append(f"changed_source_to:{new_source_agent}")

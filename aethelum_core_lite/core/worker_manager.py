@@ -67,14 +67,14 @@ class WorkerManager:
     支持工作器的优先级管理和负载均衡。
     """
     
-    def __init__(self, 
+    def __init__(self,
                  name: str,
                  manager_id: Optional[str] = None,
                  health_check_interval: float = 60.0,
                  auto_recovery: bool = True,
                  max_recovery_attempts: int = 3):
         """初始化工作器管理器
-        
+
         Args:
             name: 管理器名称
             manager_id: 管理器ID，如果不提供则自动生成
@@ -87,31 +87,35 @@ class WorkerManager:
         self.health_check_interval = health_check_interval
         self.auto_recovery = auto_recovery
         self.max_recovery_attempts = max_recovery_attempts
-        
+
+        # 日志记录器
+        import logging
+        self.logger = logging.getLogger(f"WorkerManager.{name}")
+
         # 管理器状态
         self._state = ManagerState.INITIALIZING
         self._stop_event = threading.Event()
         self._pause_event = threading.Event()
         self._pause_event.set()  # 初始状态为运行
-        
+
         # 工作器管理
         self._workers: Dict[str, AxonWorker] = {}
         self._worker_configs: Dict[str, WorkerConfig] = {}
         self._worker_recovery_attempts: Dict[str, int] = {}
-        
+
         # 统计信息
         self._stats = ManagerStats(
             manager_id=self.manager_id,
             name=self.name,
             state=self._state
         )
-        
+
         # 健康检查线程
         self._health_check_thread = threading.Thread(
             target=self._health_check_loop,
             daemon=True
         )
-        
+
         # 工作器事件回调
         self._worker_event_callbacks: List[Callable[[str, WorkerState, WorkerState], None]] = []
     
@@ -467,25 +471,25 @@ class WorkerManager:
             
             # 检查工作器是否健康
             if not worker.is_healthy():
-                print(f"Worker {worker.name} is unhealthy: {worker.get_stats().health_score}")
-                
+                self.logger.warning(f"Worker {worker.name} is unhealthy: {worker.get_stats().health_score}")
+
                 # 如果启用自动恢复且工作器已停止，尝试重启
-                if (self.auto_recovery and 
-                    not worker.is_alive() and 
+                if (self.auto_recovery and
+                    not worker.is_alive() and
                     self._worker_configs[worker_id].auto_restart and
                     self._worker_recovery_attempts[worker_id] < self.max_recovery_attempts):
-                    
-                    print(f"Attempting to restart worker {worker.name} (attempt {self._worker_recovery_attempts[worker_id] + 1})")
-                    
+
+                    self.logger.info(f"Attempting to restart worker {worker.name} (attempt {self._worker_recovery_attempts[worker_id] + 1})")
+
                     # 增加重启尝试次数
                     self._worker_recovery_attempts[worker_id] += 1
-                    
+
                     # 重启工作器
                     if self.start_worker(worker_id):
                         self._stats.auto_restarts += 1
-                        print(f"Successfully restarted worker {worker.name}")
+                        self.logger.info(f"Successfully restarted worker {worker.name}")
                     else:
-                        print(f"Failed to restart worker {worker.name}")
+                        self.logger.error(f"Failed to restart worker {worker.name}")
             else:
                 # 重置恢复尝试次数
                 self._worker_recovery_attempts[worker_id] = 0
@@ -498,7 +502,7 @@ class WorkerManager:
                     try:
                         callback(worker_id, old_state, new_state)
                     except Exception as e:
-                        print(f"Error in worker event callback: {e}")
+                        self.logger.error(f"Error in worker event callback: {e}")
     
     def _update_stats(self):
         """更新统计信息"""

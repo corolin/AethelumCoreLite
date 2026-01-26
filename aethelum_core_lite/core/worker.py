@@ -64,7 +64,7 @@ class AxonWorker(threading.Thread):
     支持暂停、恢复和停止操作，以及错误处理和恢复机制。
     """
     
-    def __init__(self, 
+    def __init__(self,
                  name: str,
                  input_queue: SynapticQueue,
                  hooks: Optional[List[BaseHook]] = None,
@@ -76,7 +76,7 @@ class AxonWorker(threading.Thread):
                  health_check_interval: float = 30.0,
                  processing_timeout: float = 60.0):
         """初始化轴突工作器
-        
+
         Args:
             name: 工作器名称
             input_queue: 输入队列
@@ -96,32 +96,36 @@ class AxonWorker(threading.Thread):
         self.hooks = hooks or []
         self.router = router
         self.error_handler = error_handler
-        
+
         # 工作器状态
         self._state = WorkerState.INITIALIZING
         self._stop_event = threading.Event()
         self._pause_event = threading.Event()
         self._pause_event.set()  # 初始状态为运行
-        
+
         # 错误处理配置
         self.max_consecutive_failures = max_consecutive_failures
         self.recovery_delay = recovery_delay
         self.health_check_interval = health_check_interval
         self.processing_timeout = processing_timeout
-        
+
         # 统计信息
         self._stats = WorkerStats(
             worker_id=self.worker_id,
             name=self.name,
             state=self._state
         )
-        
+
+        # 日志记录器
+        import logging
+        self.logger = logging.getLogger(f"AxonWorker.{name}")
+
         # 健康检查线程
         self._health_check_thread = threading.Thread(
             target=self._health_check_loop,
             daemon=True
         )
-        
+
         # 错误类型映射
         self._error_type_mapping = {
             ValueError: ErrorType.VALIDATION_ERROR,
@@ -218,20 +222,35 @@ class AxonWorker(threading.Thread):
                 try:
                     self.error_handler(e, impulse)
                 except Exception as handler_error:
-                    print(f"Error in error handler: {handler_error}")
+                    self.logger.error(f"Error in error handler: {handler_error}")
     
     def _validate_sink_security(self, impulse: NeuralImpulse):
         """验证SINK安全
-        
+
+        根据设计文档 v0.1 要求，Q_RESPONSE_SINK 的 Worker 必须验证消息是否经过 Q_AUDIT_OUTPUT 审查。
+        这是强制性安全检查，防止消息绕过输出审查直接进入响应队列。
+
+        验证规则：
+        1. 检查 routing_history 中是否包含 "Q_AUDIT_OUTPUT"（表示消息流经了该队列）
+        2. source_agent 字段应该是处理 Q_AUDIT_OUTPUT 的 Agent 名称，不直接用于验证
+
         Args:
             impulse: 神经脉冲对象
-            
+
         Raises:
-            ValueError: 如果验证失败
+            ValueError: 如果验证失败（消息未经过 Q_AUDIT_OUTPUT 审查）
         """
-        # 检查来源是否为Q_AUDIT_INPUT、Q_AUDIT_OUTPUT或Q_PROCESS_INPUT
-        if impulse.action_intent not in ["Q_AUDIT_INPUT", "Q_AUDIT_OUTPUT", "Q_PROCESS_INPUT"]:
-            raise ValueError(f"Invalid action_intent: {impulse.action_intent}. Expected Q_AUDIT_INPUT, Q_AUDIT_OUTPUT or Q_PROCESS_INPUT")
+        # 只有 Q_RESPONSE_SINK 队列需要验证
+        if impulse.action_intent == "Q_RESPONSE_SINK":
+            # 检查消息是否经过 Q_AUDIT_OUTPUT 队列
+            if "Q_AUDIT_OUTPUT" not in impulse.routing_history:
+                raise ValueError(
+                    f"【安全违规】消息直接路由到 Q_RESPONSE_SINK 但未经过 Q_AUDIT_OUTPUT 审查！\n"
+                    f"消息来源: {impulse.source_agent}\n"
+                    f"路由历史: {impulse.routing_history}\n"
+                    f"会话ID: {impulse.session_id}\n"
+                    f"根据设计文档 v0.1 第4.2节要求，所有进入 Q_RESPONSE_SINK 的消息必须经过 Q_AUDIT_OUTPUT 审查。"
+                )
     
     def _route_to_next_queue(self, impulse: NeuralImpulse):
         """路由神经脉冲到下一个队列
@@ -274,9 +293,9 @@ class AxonWorker(threading.Thread):
         self._stats.consecutive_failures += 1
         
         # 记录错误
-        print(f"Error in worker {self.name}: {error}")
+        self.logger.error(f"Error in worker {self.name}: {error}")
         if impulse:
-            print(f"Error processing impulse: {impulse.session_id}")
+            self.logger.error(f"Error processing impulse: {impulse.session_id}")
     
     def _determine_error_type(self, error: Exception) -> ErrorType:
         """确定错误类型
@@ -300,7 +319,7 @@ class AxonWorker(threading.Thread):
         self._stats.state = self._state
         self._stats.recovery_attempts += 1
         
-        print(f"Worker {self.name} entering recovery mode after {self._stats.consecutive_failures} consecutive failures")
+        self.logger.warning(f"Worker {self.name} entering recovery mode after {self._stats.consecutive_failures} consecutive failures")
         
         # 等待恢复延迟
         time.sleep(self.recovery_delay)
@@ -312,7 +331,7 @@ class AxonWorker(threading.Thread):
         self._state = WorkerState.RUNNING
         self._stats.state = self._state
         
-        print(f"Worker {self.name} recovered and resuming operation")
+        self.logger.info(f"Worker {self.name} recovered and resuming operation")
     
     def _health_check_loop(self):
         """健康检查循环"""
@@ -324,7 +343,7 @@ class AxonWorker(threading.Thread):
             
             # 检查是否需要干预
             if self._stats.health_score < 30.0:
-                print(f"Worker {self.name} health score is low: {self._stats.health_score}")
+                self.logger.warning(f"Worker {self.name} health score is low: {self._stats.health_score}")
     
     def _calculate_health_score(self):
         """计算健康分数"""
@@ -374,21 +393,21 @@ class AxonWorker(threading.Thread):
         self._pause_event.clear()
         self._state = WorkerState.PAUSED
         self._stats.state = self._state
-        print(f"Worker {self.name} paused")
-    
+        self.logger.info(f"Worker {self.name} paused")
+
     def resume(self):
         """恢复工作器"""
         self._pause_event.set()
         self._state = WorkerState.RUNNING
         self._stats.state = self._state
-        print(f"Worker {self.name} resumed")
-    
+        self.logger.info(f"Worker {self.name} resumed")
+
     def stop(self):
         """停止工作器"""
         self._state = WorkerState.STOPPING
         self._stats.state = self._state
         self._stop_event.set()
-        print(f"Worker {self.name} stopping")
+        self.logger.info(f"Worker {self.name} stopping")
     
     def get_stats(self) -> WorkerStats:
         """获取工作器统计信息

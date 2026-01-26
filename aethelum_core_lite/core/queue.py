@@ -4,6 +4,7 @@ import time
 import uuid
 import json
 import os
+import logging
 from typing import Optional, Dict, Any, List, Tuple
 from dataclasses import dataclass, asdict
 from .message import NeuralImpulse
@@ -35,41 +36,58 @@ class SynapticQueue:
     - 消息过期处理
     """
     
-    def __init__(self, queue_id: str, max_size: int = 0, 
-                 enable_persistence: bool = False, 
+    def __init__(self, queue_id: str, max_size: int = 0,
+                 enable_persistence: bool = False,
                  persistence_path: Optional[str] = None,
-                 message_ttl: Optional[float] = None):
+                 message_ttl: Optional[float] = None,
+                 persistence_interval: float = 30.0):
         """初始化突触队列
-        
+
         Args:
             queue_id: 队列唯一标识符
             max_size: 队列最大大小，0表示无限制
             enable_persistence: 是否启用持久化
             persistence_path: 持久化文件路径
             message_ttl: 消息生存时间(秒)，None表示不过期
+            persistence_interval: 后台持久化间隔(秒)，默认30秒
         """
         self.queue_id = queue_id
         self.max_size = max_size
         self.enable_persistence = enable_persistence
         self.persistence_path = persistence_path or f"queue_{queue_id}.json"
         self.message_ttl = message_ttl
-        
+        self.persistence_interval = persistence_interval
+
         # 使用优先级队列
         self._queue = queue.PriorityQueue(maxsize=max_size)
         self._lock = threading.RLock()
         self._closed = False
-        
+
         # 统计信息
         self._stats = QueueStats()
         self._start_time = time.time()
         self._processing_times = []
-        
+
         # 消息ID映射，用于快速查找和更新
         self._message_map = {}
-        
+
+        # 日志记录器
+        self.logger = logging.getLogger(f"aethelum.queue.{queue_id}")
+
+        # 后台持久化线程
+        self._persistence_stop_event = threading.Event()
+        self._persistence_thread = None
+
         # 如果启用持久化，尝试加载已有数据
         if self.enable_persistence:
             self._load_from_disk()
+            # 启动后台持久化线程
+            self._persistence_thread = threading.Thread(
+                target=self._persistence_loop,
+                daemon=True,
+                name=f"QueuePersistence-{queue_id}"
+            )
+            self._persistence_thread.start()
     
     def put(self, impulse: NeuralImpulse, priority: int = 5, block: bool = True, timeout: Optional[float] = None) -> bool:
         """将神经脉冲放入队列
@@ -106,16 +124,13 @@ class SynapticQueue:
                 self._stats.total_messages += 1
                 self._stats.last_activity = time.time()
                 self._stats.queue_size = self._queue.qsize()
-                
+
                 # 更新优先级分布
                 priority_key = f"priority_{priority}"
                 self._stats.priority_distribution[priority_key] = \
                     self._stats.priority_distribution.get(priority_key, 0) + 1
-            
-            # 持久化
-            if self.enable_persistence:
-                self._save_to_disk()
-                
+
+            # 持久化由后台线程定期处理，不再立即持久化
             return True
         except queue.Full:
             return False
@@ -200,12 +215,20 @@ class SynapticQueue:
     
     def close(self):
         """关闭队列"""
+        # 停止后台持久化线程
+        if self._persistence_thread is not None:
+            self._persistence_stop_event.set()
+            # 等待线程结束（最多等待5秒）
+            self._persistence_thread.join(timeout=5.0)
+            self.logger.info(f"Queue {self.queue_id}: Background persistence thread stopped")
+
         with self._lock:
             self._closed = True
             self._stats.active_time = time.time() - self._start_time
-            
+
             if self.enable_persistence:
                 self._save_to_disk()
+                self.logger.info(f"Queue {self.queue_id}: Final state persisted to disk")
     
     def size(self) -> int:
         """获取队列大小"""
@@ -262,16 +285,13 @@ class SynapticQueue:
             # 更新优先级分布
             old_key = f"priority_{old_priority}"
             new_key = f"priority_{new_priority}"
-            
+
             self._stats.priority_distribution[old_key] = \
                 max(0, self._stats.priority_distribution.get(old_key, 0) - 1)
             self._stats.priority_distribution[new_key] = \
                 self._stats.priority_distribution.get(new_key, 0) + 1
-            
-            # 持久化
-            if self.enable_persistence:
-                self._save_to_disk()
-                
+
+            # 持久化由后台线程定期处理，不再立即持久化
             return True
     
     def get_expired_messages(self) -> List[NeuralImpulse]:
@@ -330,11 +350,9 @@ class SynapticQueue:
             # 替换队列
             self._queue = new_queue
             self._stats.queue_size = self._queue.qsize()
-            
-            # 持久化
-            if self.enable_persistence:
-                self._save_to_disk()
-        
+
+            # 持久化由后台线程定期处理，不再立即持久化
+
         return expired_count
     
     def batch_put(self, impulses: List[Tuple[NeuralImpulse, int]], 
@@ -395,7 +413,33 @@ class SynapticQueue:
             
         queue_timestamp = impulse.metadata.get("queue_timestamp", time.time())
         return time.time() - queue_timestamp > self.message_ttl
-    
+
+    def _persistence_loop(self):
+        """后台持久化循环，定期保存队列状态到磁盘"""
+        self.logger.info(
+            f"Queue {self.queue_id}: Background persistence thread started, "
+            f"interval={self.persistence_interval}s"
+        )
+
+        while not self._persistence_stop_event.is_set():
+            try:
+                # 等待指定的间隔时间，或直到收到停止信号
+                self._persistence_stop_event.wait(self.persistence_interval)
+
+                # 如果收到停止信号，退出循环
+                if self._persistence_stop_event.is_set():
+                    break
+
+                # 执行持久化
+                self.logger.debug(f"Queue {self.queue_id}: Starting periodic persistence")
+                self._save_to_disk()
+                self.logger.debug(f"Queue {self.queue_id}: Periodic persistence completed")
+
+            except Exception as e:
+                self.logger.error(f"Queue {self.queue_id}: Error in persistence loop: {e}")
+
+        self.logger.info(f"Queue {self.queue_id}: Background persistence loop exited")
+
     def _save_to_disk(self):
         """将队列状态保存到磁盘"""
         if not self.enable_persistence:
@@ -441,7 +485,7 @@ class SynapticQueue:
                 json.dump(data, f, ensure_ascii=False, indent=2)
         except Exception as e:
             # 记录错误但不中断程序
-            print(f"Error saving queue to disk: {e}")
+            self.logger.error(f"Error saving queue to disk: {e}")
     
     def _load_from_disk(self):
         """从磁盘加载队列状态"""
@@ -493,6 +537,6 @@ class SynapticQueue:
                 self._stats.queue_size = self._queue.qsize()
         except Exception as e:
             # 记录错误但不中断程序
-            print(f"Error loading queue from disk: {e}")
+            self.logger.error(f"Error loading queue from disk: {e}")
             # 如果加载失败，清空队列以避免不一致状态
             self.clear()
