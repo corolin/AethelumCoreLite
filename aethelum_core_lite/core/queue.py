@@ -7,7 +7,16 @@ import os
 import logging
 from typing import Optional, Dict, Any, List, Tuple
 from dataclasses import dataclass, asdict
+from collections import deque
 from .message import NeuralImpulse
+
+# msgpack 是可选依赖，优先使用 msgpack，否则回退到 json
+try:
+    import msgpack
+    MSGPACK_AVAILABLE = True
+except ImportError:
+    MSGPACK_AVAILABLE = False
+    msgpack = None
 
 @dataclass
 class QueueStats:
@@ -40,23 +49,30 @@ class SynapticQueue:
                  enable_persistence: bool = False,
                  persistence_path: Optional[str] = None,
                  message_ttl: Optional[float] = None,
-                 persistence_interval: float = 30.0):
+                 persistence_interval: float = 30.0,
+                 cleanup_interval: float = 300.0):
         """初始化突触队列
 
         Args:
             queue_id: 队列唯一标识符
             max_size: 队列最大大小，0表示无限制
             enable_persistence: 是否启用持久化
-            persistence_path: 持久化文件路径
+            persistence_path: 持久化文件路径（不含扩展名）
             message_ttl: 消息生存时间(秒)，None表示不过期
-            persistence_interval: 后台持久化间隔(秒)，默认30秒
+            persistence_interval: 后台持久化间隔(秒)，默认30秒（已废弃，保留兼容性）
+            cleanup_interval: 后台清理间隔(秒)，默认300秒(5分钟)
         """
         self.queue_id = queue_id
         self.max_size = max_size
         self.enable_persistence = enable_persistence
-        self.persistence_path = persistence_path or f"queue_{queue_id}.json"
+        base_path = persistence_path or f"queue_{queue_id}"
+        # WAL日志文件路径（根据可用性选择格式）
+        ext = "msgpack" if MSGPACK_AVAILABLE else "jsonl"
+        self._log1_path = f"{base_path}_log1.{ext}"  # 消息日志（append-only）
+        self._log2_path = f"{base_path}_log2.{ext}"  # 消费日志（append-only）
         self.message_ttl = message_ttl
         self.persistence_interval = persistence_interval
+        self.cleanup_interval = cleanup_interval
 
         # 使用优先级队列
         self._queue = queue.PriorityQueue(maxsize=max_size)
@@ -74,51 +90,73 @@ class SynapticQueue:
         # 日志记录器
         self.logger = logging.getLogger(f"aethelum.queue.{queue_id}")
 
-        # 后台持久化线程
-        self._persistence_stop_event = threading.Event()
-        self._persistence_thread = None
+        # WAL日志文件句柄（append-only模式）
+        self._log1_file = None
+        self._log2_file = None
 
-        # 如果启用持久化，尝试加载已有数据
+        # WAL异步写入缓冲区
+        self._log1_buffer = deque(maxlen=10000)  # 内存缓冲队列
+        self._log2_buffer = deque(maxlen=10000)
+        self._write_lock = threading.Lock()  # 写入锁
+
+        # 后台写入线程
+        self._write_stop_event = threading.Event()
+        self._write_thread = None
+
+        # 后台清理线程
+        self._cleanup_stop_event = threading.Event()
+        self._cleanup_thread = None
+
+        # 如果启用持久化，初始化WAL日志
         if self.enable_persistence:
-            self._load_from_disk()
-            # 启动后台持久化线程
-            self._persistence_thread = threading.Thread(
-                target=self._persistence_loop,
+            self._init_wal_logs()
+            # 从log1恢复未处理的消息
+            self._load_from_log1()
+            # 启动后台写入线程
+            self._write_thread = threading.Thread(
+                target=self._write_loop,
                 daemon=True,
-                name=f"QueuePersistence-{queue_id}"
+                name=f"QueueWriter-{queue_id}"
             )
-            self._persistence_thread.start()
+            self._write_thread.start()
+            # 启动后台清理线程
+            self._cleanup_thread = threading.Thread(
+                target=self._cleanup_loop,
+                daemon=True,
+                name=f"QueueCleanup-{queue_id}"
+            )
+            self._cleanup_thread.start()
     
     def put(self, impulse: NeuralImpulse, priority: int = 5, block: bool = True, timeout: Optional[float] = None) -> bool:
         """将神经脉冲放入队列
-        
+
         Args:
             impulse: 神经脉冲对象
             priority: 优先级，数字越小优先级越高
             block: 是否阻塞等待队列有空间
             timeout: 阻塞超时时间
-            
+
         Returns:
             bool: 是否成功放入队列
         """
         if self._closed:
             return False
-            
+
         # 检查消息是否过期
         if self._is_expired(impulse):
             return False
-            
+
         # 为消息添加唯一ID和时间戳
         message_id = str(uuid.uuid4())
         impulse.metadata["message_id"] = message_id
         impulse.metadata["queue_timestamp"] = time.time()
         impulse.metadata["priority"] = priority
-        
+
         try:
             # 使用优先级队列，(priority, timestamp, message_id, impulse)
             item = (priority, time.time(), message_id, impulse)
             self._queue.put(item, block=block, timeout=timeout)
-            
+
             with self._lock:
                 self._message_map[message_id] = impulse
                 self._stats.total_messages += 1
@@ -130,42 +168,49 @@ class SynapticQueue:
                 self._stats.priority_distribution[priority_key] = \
                     self._stats.priority_distribution.get(priority_key, 0) + 1
 
-            # 持久化由后台线程定期处理，不再立即持久化
+            # WAL: 追加消息到内存缓冲（O(1)操作，非阻塞）
+            if self.enable_persistence:
+                self._log1_buffer.append((message_id, priority, impulse))
+
             return True
         except queue.Full:
             return False
     
     def get(self, block: bool = True, timeout: Optional[float] = None) -> Optional[NeuralImpulse]:
         """从队列获取神经脉冲
-        
+
         Args:
             block: 是否阻塞等待队列有消息
             timeout: 阻塞超时时间
-            
+
         Returns:
             NeuralImpulse: 神经脉冲对象，队列为空时返回None
         """
         if self._closed:
             return None
-            
+
         try:
             priority, timestamp, message_id, impulse = self._queue.get(block=block, timeout=timeout)
-            
+
             # 检查消息是否过期
             if self._is_expired(impulse):
                 self._queue.task_done()
                 return self.get(block, timeout)  # 递归获取下一个消息
-            
+
             processing_start = time.time()
-            
+
             with self._lock:
                 # 从映射中移除
                 if message_id in self._message_map:
                     del self._message_map[message_id]
-                
+
                 self._stats.queue_size = self._queue.qsize()
                 self._stats.last_activity = time.time()
-            
+
+            # WAL: 追加消息ID到内存缓冲（O(1)操作，非阻塞）
+            if self.enable_persistence:
+                self._log2_buffer.append(message_id)
+
             return impulse
         except queue.Empty:
             return None
@@ -206,29 +251,38 @@ class SynapticQueue:
                     self._queue.task_done()
                 except queue.Empty:
                     break
-            
+
             self._message_map.clear()
             self._stats.queue_size = 0
-            
+
             if self.enable_persistence:
-                self._save_to_disk()
+                # 清空WAL日志文件
+                self._cleanup_logs()
     
     def close(self):
         """关闭队列"""
-        # 停止后台持久化线程
-        if self._persistence_thread is not None:
-            self._persistence_stop_event.set()
+        # 停止后台写入线程
+        if self._write_thread is not None:
+            self._write_stop_event.set()
+            # 等待写入线程结束（最多等待5秒）
+            self._write_thread.join(timeout=5.0)
+            self.logger.info(f"Queue {self.queue_id}: Background write thread stopped")
+
+        # 停止后台清理线程
+        if self._cleanup_thread is not None:
+            self._cleanup_stop_event.set()
             # 等待线程结束（最多等待5秒）
-            self._persistence_thread.join(timeout=5.0)
-            self.logger.info(f"Queue {self.queue_id}: Background persistence thread stopped")
+            self._cleanup_thread.join(timeout=5.0)
+            self.logger.info(f"Queue {self.queue_id}: Background cleanup thread stopped")
 
         with self._lock:
             self._closed = True
             self._stats.active_time = time.time() - self._start_time
 
-            if self.enable_persistence:
-                self._save_to_disk()
-                self.logger.info(f"Queue {self.queue_id}: Final state persisted to disk")
+        # 关闭WAL日志文件（不执行清理，保留给下次启动）
+        if self.enable_persistence:
+            self._close_wal_logs()
+            self.logger.info(f"Queue {self.queue_id}: WAL logs closed")
     
     def size(self) -> int:
         """获取队列大小"""
@@ -414,129 +468,367 @@ class SynapticQueue:
         queue_timestamp = impulse.metadata.get("queue_timestamp", time.time())
         return time.time() - queue_timestamp > self.message_ttl
 
-    def _persistence_loop(self):
-        """后台持久化循环，定期保存队列状态到磁盘"""
+    def _write_loop(self):
+        """后台写入循环，批量将内存缓冲写入文件"""
         self.logger.info(
-            f"Queue {self.queue_id}: Background persistence thread started, "
-            f"interval={self.persistence_interval}s"
+            f"Queue {self.queue_id}: Background write thread started"
         )
 
-        while not self._persistence_stop_event.is_set():
+        while not self._write_stop_event.is_set():
             try:
-                # 等待指定的间隔时间，或直到收到停止信号
-                self._persistence_stop_event.wait(self.persistence_interval)
+                # 每秒批量写入一次
+                self._write_stop_event.wait(1.0)
 
-                # 如果收到停止信号，退出循环
-                if self._persistence_stop_event.is_set():
+                if self._write_stop_event.is_set():
+                    # 退出前刷新所有缓冲数据
+                    self._flush_log1_buffer()
+                    self._flush_log2_buffer()
                     break
 
-                # 执行持久化
-                self.logger.debug(f"Queue {self.queue_id}: Starting periodic persistence")
-                self._save_to_disk()
-                self.logger.debug(f"Queue {self.queue_id}: Periodic persistence completed")
+                # 定期刷新缓冲
+                if len(self._log1_buffer) > 100:
+                    self._flush_log1_buffer()
+                if len(self._log2_buffer) > 100:
+                    self._flush_log2_buffer()
 
             except Exception as e:
-                self.logger.error(f"Queue {self.queue_id}: Error in persistence loop: {e}")
+                self.logger.error(f"Queue {self.queue_id}: Error in write loop: {e}")
 
-        self.logger.info(f"Queue {self.queue_id}: Background persistence loop exited")
+        self.logger.info(f"Queue {self.queue_id}: Background write loop exited")
 
-    def _save_to_disk(self):
-        """将队列状态保存到磁盘"""
-        if not self.enable_persistence:
+    def _flush_log1_buffer(self):
+        """批量刷新log1缓冲区到文件"""
+        if not self._log1_buffer:
             return
-            
-        try:
-            # 准备要保存的数据
-            data = {
-                "queue_id": self.queue_id,
-                "max_size": self.max_size,
-                "message_ttl": self.message_ttl,
-                "stats": asdict(self._stats),
-                "messages": []
-            }
-            
-            # 保存消息
-            with self._lock:
-                # 创建临时队列来遍历而不影响原队列
-                temp_items = []
-                while not self._queue.empty():
-                    try:
-                        item = self._queue.get_nowait()
-                        temp_items.append(item)
-                        
-                        priority, timestamp, message_id, impulse = item
-                        # 将神经脉冲转换为可序列化的字典
-                        impulse_dict = impulse.to_dict()
-                        data["messages"].append({
+
+        with self._write_lock:
+            # 批量取出所有待写入的数据
+            batch = []
+            while self._log1_buffer:
+                batch.append(self._log1_buffer.popleft())
+
+            if not batch:
+                return
+
+            try:
+                if MSGPACK_AVAILABLE:
+                    # msgpack 批量写入
+                    for message_id, priority, impulse in batch:
+                        log_entry = {
+                            "id": message_id,
                             "priority": priority,
-                            "timestamp": timestamp,
-                            "message_id": message_id,
-                            "impulse": impulse_dict
-                        })
-                    except queue.Empty:
-                        break
-                
-                # 将消息放回队列
-                for item in temp_items:
-                    self._queue.put(item)
-            
-            # 写入文件
-            with open(self.persistence_path, 'w', encoding='utf-8') as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
-        except Exception as e:
-            # 记录错误但不中断程序
-            self.logger.error(f"Error saving queue to disk: {e}")
-    
-    def _load_from_disk(self):
-        """从磁盘加载队列状态"""
-        if not self.enable_persistence or not os.path.exists(self.persistence_path):
+                            "impulse": impulse.to_dict(),
+                            "timestamp": time.time()
+                        }
+                        packed = msgpack.packb(log_entry, use_bin_type=True)
+                        # 写入长度前缀（4字节）+ 数据
+                        self._log1_file.write(len(packed).to_bytes(4, 'big'))
+                        self._log1_file.write(packed)
+                else:
+                    # JSON 批量写入
+                    for message_id, priority, impulse in batch:
+                        log_entry = {
+                            "id": message_id,
+                            "priority": priority,
+                            "impulse": impulse.to_dict(),
+                            "timestamp": time.time()
+                        }
+                        self._log1_file.write(json.dumps(log_entry, ensure_ascii=False) + '\n')
+
+                # 批量flush
+                self._log1_file.flush()
+
+            except Exception as e:
+                self.logger.error(f"Queue {self.queue_id}: Failed to flush log1 buffer: {e}")
+
+    def _flush_log2_buffer(self):
+        """批量刷新log2缓冲区到文件"""
+        if not self._log2_buffer:
             return
-            
+
+        with self._write_lock:
+            # 批量取出所有待写入的数据
+            batch = []
+            while self._log2_buffer:
+                batch.append(self._log2_buffer.popleft())
+
+            if not batch:
+                return
+
+            try:
+                if MSGPACK_AVAILABLE:
+                    # msgpack 批量写入
+                    for message_id in batch:
+                        packed = msgpack.packb(message_id, use_bin_type=True)
+                        self._log2_file.write(packed)
+                else:
+                    # JSON 批量写入
+                    for message_id in batch:
+                        self._log2_file.write(message_id + '\n')
+
+                # 批量flush
+                self._log2_file.flush()
+
+            except Exception as e:
+                self.logger.error(f"Queue {self.queue_id}: Failed to flush log2 buffer: {e}")
+
+    def _init_wal_logs(self):
+        """初始化WAL日志文件（append-only模式）"""
         try:
-            with open(self.persistence_path, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-            
-            # 加载统计信息
-            if "stats" in data:
-                stats_dict = data["stats"]
-                self._stats = QueueStats(
-                    total_messages=stats_dict.get("total_messages", 0),
-                    failed_messages=stats_dict.get("failed_messages", 0),
-                    processed_messages=stats_dict.get("processed_messages", 0),
-                    active_time=stats_dict.get("active_time", 0.0),
-                    last_activity=stats_dict.get("last_activity", 0.0),
-                    average_processing_time=stats_dict.get("average_processing_time", 0.0),
-                    queue_size=0,  # 将在加载消息后更新
-                    priority_distribution=stats_dict.get("priority_distribution", {})
+            if MSGPACK_AVAILABLE:
+                # msgpack 使用二进制模式
+                self._log1_file = open(self._log1_path, 'ab')
+                self._log2_file = open(self._log2_path, 'ab')
+                self.logger.info(
+                    f"Queue {self.queue_id}: WAL logs initialized with msgpack, "
+                    f"log1={self._log1_path}, log2={self._log2_path}"
                 )
-            
-            # 加载消息
-            if "messages" in data:
-                for msg_data in data["messages"]:
-                    priority = msg_data.get("priority", 5)
-                    timestamp = msg_data.get("timestamp", time.time())
-                    message_id = msg_data.get("message_id", str(uuid.uuid4()))
-                    impulse_dict = msg_data.get("impulse", {})
-                    
-                    # 从字典重建神经脉冲
-                    impulse = NeuralImpulse.from_dict(impulse_dict)
-                    
-                    # 确保元数据中有必要的信息
-                    impulse.metadata["message_id"] = message_id
-                    impulse.metadata["queue_timestamp"] = timestamp
-                    impulse.metadata["priority"] = priority
-                    
-                    # 放入队列
-                    item = (priority, timestamp, message_id, impulse)
-                    self._queue.put(item, block=False)
-                    
-                    # 更新消息映射
-                    self._message_map[message_id] = impulse
-                
-                # 更新队列大小
-                self._stats.queue_size = self._queue.qsize()
+            else:
+                # JSON 使用文本模式
+                self._log1_file = open(self._log1_path, 'a', encoding='utf-8')
+                self._log2_file = open(self._log2_path, 'a', encoding='utf-8')
+                self.logger.info(
+                    f"Queue {self.queue_id}: WAL logs initialized with JSON, "
+                    f"log1={self._log1_path}, log2={self._log2_path}"
+                )
         except Exception as e:
-            # 记录错误但不中断程序
-            self.logger.error(f"Error loading queue from disk: {e}")
+            self.logger.error(f"Queue {self.queue_id}: Failed to initialize WAL logs: {e}")
+            raise
+
+    def _close_wal_logs(self):
+        """关闭WAL日志文件"""
+        try:
+            if self._log1_file:
+                # 关闭前确保最后一次flush
+                self._log1_file.flush()
+                self._log1_file.close()
+                self._log1_file = None
+            if self._log2_file:
+                # 关闭前确保最后一次flush
+                self._log2_file.flush()
+                self._log2_file.close()
+                self._log2_file = None
+        except Exception as e:
+            self.logger.error(f"Queue {self.queue_id}: Error closing WAL logs: {e}")
+
+    def _cleanup_loop(self):
+        """后台清理循环，定期清理已处理消息"""
+        self.logger.info(
+            f"Queue {self.queue_id}: Background cleanup thread started, "
+            f"interval={self.cleanup_interval}s"
+        )
+
+        while not self._cleanup_stop_event.is_set():
+            try:
+                # 等待指定的间隔时间，或直到收到停止信号
+                self._cleanup_stop_event.wait(self.cleanup_interval)
+
+                # 如果收到停止信号，执行最后一次清理后退出
+                if self._cleanup_stop_event.is_set():
+                    self._cleanup_logs()
+                    break
+
+                # 执行清理
+                self.logger.debug(f"Queue {self.queue_id}: Starting log cleanup")
+                self._cleanup_logs()
+                self.logger.debug(f"Queue {self.queue_id}: Log cleanup completed")
+
+            except Exception as e:
+                self.logger.error(f"Queue {self.queue_id}: Error in cleanup loop: {e}")
+
+        self.logger.info(f"Queue {self.queue_id}: Background cleanup loop exited")
+
+    def _cleanup_logs(self):
+        """清理已处理消息：读取log2，从log1中删除已处理的消息"""
+        if not os.path.exists(self._log2_path):
+            return
+
+        try:
+            # 读取log2中所有已处理的消息ID
+            processed_ids = set()
+            with open(self._log2_path, 'rb' if MSGPACK_AVAILABLE else 'r', encoding=None if MSGPACK_AVAILABLE else 'utf-8') as f:
+                if MSGPACK_AVAILABLE:
+                    # msgpack 解包所有消息ID
+                    unpacker = msgpack.Unpacker(f, raw=False)
+                    for msg_id in unpacker:
+                        if isinstance(msg_id, str):
+                            processed_ids.add(msg_id)
+                else:
+                    # JSON 模式
+                    for line in f:
+                        line = line.strip()
+                        if line:
+                            processed_ids.add(line)
+
+            if not processed_ids:
+                return
+
+            self.logger.info(
+                f"Queue {self.queue_id}: Cleaning up {len(processed_ids)} processed messages"
+            )
+
+            # 读取log1，过滤出未处理的消息
+            if not os.path.exists(self._log1_path):
+                # log1不存在，直接清空log2
+                open(self._log2_path, 'w' if not MSGPACK_AVAILABLE else 'wb').close()
+                return
+
+            temp_log1_path = self._log1_path + '.tmp'
+            kept_count = 0
+
+            with open(self._log1_path, 'rb' if MSGPACK_AVAILABLE else 'r', encoding=None if MSGPACK_AVAILABLE else 'utf-8') as f_in, \
+                 open(temp_log1_path, 'wb' if MSGPACK_AVAILABLE else 'w', encoding=None if MSGPACK_AVAILABLE else 'utf-8') as f_out:
+
+                if MSGPACK_AVAILABLE:
+                    # msgpack 模式：读取长度前缀 + 数据
+                    while True:
+                        # 读取长度前缀（4字节）
+                        length_bytes = f_in.read(4)
+                        if not length_bytes or len(length_bytes) < 4:
+                            break
+                        length = int.from_bytes(length_bytes, 'big')
+
+                        # 读取数据
+                        data = f_in.read(length)
+                        if not data or len(data) < length:
+                            break
+
+                        # 反序列化
+                        try:
+                            log_entry = msgpack.unpackb(data, raw=False)
+                            message_id = log_entry.get(b'id') if isinstance(log_entry.get('id'), bytes) else log_entry.get('id')
+                            if message_id not in processed_ids:
+                                # 保留未处理的消息
+                                f_out.write(length_bytes)
+                                f_out.write(data)
+                                kept_count += 1
+                        except Exception:
+                            continue
+                else:
+                    # JSON 模式
+                    for line in f_in:
+                        if not line.strip():
+                            continue
+                        try:
+                            log_entry = json.loads(line)
+                            message_id = log_entry.get('id')
+                            if message_id not in processed_ids:
+                                # 保留未处理的消息
+                                f_out.write(line)
+                                kept_count += 1
+                        except json.JSONDecodeError:
+                            continue
+
+            # 替换log1文件
+            os.replace(temp_log1_path, self._log1_path)
+
+            # 清空log2文件
+            open(self._log2_path, 'w' if not MSGPACK_AVAILABLE else 'wb').close()
+
+            self.logger.info(
+                f"Queue {self.queue_id}: Cleanup completed, "
+                f"kept {kept_count} unprocessed messages, removed {len(processed_ids)} processed"
+            )
+
+        except Exception as e:
+            self.logger.error(f"Queue {self.queue_id}: Error during log cleanup: {e}")
+
+    def _load_from_log1(self):
+        """从log1恢复未处理的消息到队列"""
+        if not os.path.exists(self._log1_path):
+            self.logger.info(f"Queue {self.queue_id}: No existing log1 found, starting fresh")
+            return
+
+        try:
+            # 先执行一次清理（移除上次运行已处理的消息）
+            if os.path.exists(self._log2_path):
+                self.logger.info(f"Queue {self.queue_id}: Cleaning up previous run's processed messages")
+                self._cleanup_logs()
+
+            loaded_count = 0
+            current_time = time.time()
+
+            with open(self._log1_path, 'rb' if MSGPACK_AVAILABLE else 'r', encoding=None if MSGPACK_AVAILABLE else 'utf-8') as f:
+                if MSGPACK_AVAILABLE:
+                    # msgpack 模式：读取长度前缀 + 数据
+                    while True:
+                        # 读取长度前缀（4字节）
+                        length_bytes = f.read(4)
+                        if not length_bytes or len(length_bytes) < 4:
+                            break
+                        length = int.from_bytes(length_bytes, 'big')
+
+                        # 读取数据
+                        data = f.read(length)
+                        if not data or len(data) < length:
+                            break
+
+                        # 反序列化
+                        try:
+                            log_entry = msgpack.unpackb(data, raw=False)
+                            self._process_log_entry(log_entry, current_time)
+                            loaded_count += 1
+                        except Exception as e:
+                            self.logger.warning(f"Queue {self.queue_id}: Failed to load msgpack entry: {e}")
+                            continue
+                else:
+                    # JSON 模式
+                    for line in f:
+                        if not line.strip():
+                            continue
+                        try:
+                            log_entry = json.loads(line)
+                            self._process_log_entry(log_entry, current_time)
+                            loaded_count += 1
+                        except (json.JSONDecodeError, Exception) as e:
+                            self.logger.warning(f"Queue {self.queue_id}: Failed to load JSON entry: {e}")
+                            continue
+
+            # 更新队列大小
+            self._stats.queue_size = self._queue.qsize()
+
+            self.logger.info(
+                f"Queue {self.queue_id}: Loaded {loaded_count} messages from log1, "
+                f"current queue size: {self._stats.queue_size}"
+            )
+
+        except Exception as e:
+            self.logger.error(f"Queue {self.queue_id}: Error loading from log1: {e}")
             # 如果加载失败，清空队列以避免不一致状态
             self.clear()
+
+    def _process_log_entry(self, log_entry: Dict[str, Any], current_time: float):
+        """处理单个日志条目并加载到队列"""
+        try:
+            message_id = log_entry.get('id')
+            priority = log_entry.get('priority', 5)
+            timestamp = log_entry.get('timestamp', current_time)
+            impulse_dict = log_entry.get('impulse', {})
+
+            # 从字典重建神经脉冲
+            impulse = NeuralImpulse.from_dict(impulse_dict)
+
+            # 确保元数据中有必要的信息
+            impulse.metadata["message_id"] = message_id
+            impulse.metadata["queue_timestamp"] = timestamp
+            impulse.metadata["priority"] = priority
+
+            # 检查消息是否过期
+            if self._is_expired(impulse):
+                return
+
+            # 放入队列
+            item = (priority, timestamp, message_id, impulse)
+            self._queue.put(item, block=False)
+
+            # 更新消息映射和统计
+            self._message_map[message_id] = impulse
+            self._stats.total_messages += 1
+
+            # 更新优先级分布
+            priority_key = f"priority_{priority}"
+            self._stats.priority_distribution[priority_key] = \
+                self._stats.priority_distribution.get(priority_key, 0) + 1
+        except Exception as e:
+            self.logger.warning(f"Queue {self.queue_id}: Failed to process log entry: {e}")
+

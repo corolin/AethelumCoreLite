@@ -161,6 +161,11 @@ class PerformanceBenchmark:
         """
         self.print_header(f"💾 持久化吞吐量测试（间隔: {persistence_interval}秒）")
 
+        import os
+        # 清理旧文件
+        if os.path.exists("/tmp/benchmark_queue.json"):
+            os.remove("/tmp/benchmark_queue.json")
+
         queue = SynapticQueue(
             queue_id="benchmark_persistence",
             max_size=0,
@@ -170,14 +175,16 @@ class PerformanceBenchmark:
         )
 
         latencies = []
+        persistence_times = []
         errors = 0
         start_time = time.time()
 
         for i in range(num_messages):
             try:
-                # 创建消息
+                # 创建更大内容的消息，模拟真实场景
+                content = f"Test message {i} " + "x" * 100  # 约 100 字节
                 impulse = NeuralImpulse(
-                    content=f"Test message {i}",
+                    content=content,
                     action_intent="Q_PROCESS_INPUT"
                 )
 
@@ -205,8 +212,22 @@ class PerformanceBenchmark:
         end_time = time.time()
         duration = end_time - start_time
 
+        # 等待一次后台持久化完成（如果间隔时间到了）
+        print("\n等待后台持久化线程触发...")
+        time.sleep(persistence_interval + 2)  # 等待持久化间隔 + 2秒余量
+
         # 关闭队列（触发最终持久化）
+        print("触发最终持久化...")
+        close_start = time.time()
         queue.close()
+        close_end = time.time()
+        close_time = close_end - close_start
+        print(f"最终持久化耗时: {close_time*1000:.2f} ms")
+
+        # 检查持久化文件大小
+        if os.path.exists("/tmp/benchmark_queue.json"):
+            file_size = os.path.getsize("/tmp/benchmark_queue.json")
+            print(f"持久化文件大小: {file_size:,} bytes ({file_size/1024/1024:.2f} MB)")
 
         # 计算统计数据
         result = BenchmarkResult(
@@ -222,7 +243,9 @@ class PerformanceBenchmark:
             errors=errors,
             details={
                 "队列大小": queue.size(),
-                "持久化间隔": f"{persistence_interval}秒"
+                "持久化间隔": f"{persistence_interval}秒",
+                "最终持久化耗时": f"{close_time*1000:.2f}ms",
+                "持久化文件大小": f"{os.path.getsize('/tmp/benchmark_queue.json') if os.path.exists('/tmp/benchmark_queue.json') else 0} bytes"
             }
         )
 
