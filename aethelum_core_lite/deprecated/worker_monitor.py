@@ -320,23 +320,54 @@ class WorkerMonitor:
             self._recovery_callbacks.remove(callback)
     
     def _metrics_collection_loop(self):
-        """指标收集循环"""
+        """指标收集循环（带异常处理）"""
         while not self._stop_event.is_set():
-            time.sleep(self.metrics_collection_interval)
-            
-            # 检查是否暂停
-            if not self._pause_event.is_set():
-                continue
-            
-            # 收集工作器指标
-            self._collect_worker_metrics()
-            
-            # 收集调度器指标
-            if self.scheduler:
-                self._collect_scheduler_metrics()
-            
-            # 更新统计信息
-            self._update_stats()
+            try:
+                time.sleep(self.metrics_collection_interval)
+
+                # 检查是否暂停
+                if not self._pause_event.is_set():
+                    continue
+
+                # 收集工作器指标（添加异常保护）
+                try:
+                    self._collect_worker_metrics()
+                except Exception as e:
+                    self.logger.error(
+                        f"[Monitor] Error collecting worker metrics: {repr(e)}",
+                        exc_info=True
+                    )
+                    # 继续运行，不退出循环
+
+                # 收集调度器指标（添加异常保护）
+                try:
+                    if self.scheduler:
+                        self._collect_scheduler_metrics()
+                except Exception as e:
+                    self.logger.error(
+                        f"[Monitor] Error collecting scheduler metrics: {repr(e)}",
+                        exc_info=True
+                    )
+                    # 继续运行，不退出循环
+
+                # 更新统计信息（添加异常保护）
+                try:
+                    self._update_stats()
+                except Exception as e:
+                    self.logger.error(
+                        f"[Monitor] Error updating stats: {repr(e)}",
+                        exc_info=True
+                    )
+
+            except Exception as e:
+                # 捕获循环级别的异常
+                self.logger.error(
+                    f"[Monitor] Unexpected error in metrics collection loop: {repr(e)}",
+                    exc_info=True
+                )
+                # 继续运行，不退出
+
+        self.logger.info(f"[Monitor] Metrics collection loop exited")
     
     def _collect_worker_metrics(self):
         """收集工作器指标"""
@@ -510,16 +541,34 @@ class WorkerMonitor:
         self._stats.last_collection_time = timestamp
     
     def _health_check_loop(self):
-        """健康检查循环"""
+        """健康检查循环（带异常处理）"""
         while not self._stop_event.is_set():
-            time.sleep(self.health_check_interval)
-            
-            # 检查是否暂停
-            if not self._pause_event.is_set():
-                continue
-            
-            # 执行健康检查
-            self._perform_health_checks()
+            try:
+                time.sleep(self.health_check_interval)
+
+                # 检查是否暂停
+                if not self._pause_event.is_set():
+                    continue
+
+                # 执行健康检查（添加异常保护）
+                try:
+                    self._perform_health_checks()
+                except Exception as e:
+                    self.logger.error(
+                        f"[Monitor] Error performing health checks: {repr(e)}",
+                        exc_info=True
+                    )
+                    # 继续运行，不退出循环
+
+            except Exception as e:
+                # 捕获循环级别的异常
+                self.logger.error(
+                    f"[Monitor] Unexpected error in health check loop: {repr(e)}",
+                    exc_info=True
+                )
+                # 继续运行，不退出
+
+        self.logger.info(f"[Monitor] Health check loop exited")
     
     def _perform_health_checks(self):
         """执行健康检查"""
@@ -568,20 +617,45 @@ class WorkerMonitor:
                 )
     
     def _alert_processing_loop(self):
-        """告警处理循环"""
+        """告警处理循环（带异常处理）"""
         while not self._stop_event.is_set():
-            time.sleep(1.0)  # 每秒检查一次
-            
-            # 检查是否暂停
-            if not self._pause_event.is_set():
-                continue
-            
-            # 检查阈值规则
-            self._check_threshold_rules()
-            
-            # 处理自动恢复
-            if self.enable_auto_recovery:
-                self._process_auto_recovery()
+            try:
+                time.sleep(1.0)  # 每秒检查一次
+
+                # 检查是否暂停
+                if not self._pause_event.is_set():
+                    continue
+
+                # 检查阈值规则（添加异常保护）
+                try:
+                    self._check_threshold_rules()
+                except Exception as e:
+                    self.logger.error(
+                        f"[Monitor] Error checking threshold rules: {repr(e)}",
+                        exc_info=True
+                    )
+                    # 继续运行，不退出循环
+
+                # 处理自动恢复（添加异常保护）
+                try:
+                    if self.enable_auto_recovery:
+                        self._process_auto_recovery()
+                except Exception as e:
+                    self.logger.error(
+                        f"[Monitor] Error processing auto recovery: {repr(e)}",
+                        exc_info=True
+                    )
+                    # 继续运行，不退出循环
+
+            except Exception as e:
+                # 捕获循环级别的异常
+                self.logger.error(
+                    f"[Monitor] Unexpected error in alert processing loop: {repr(e)}",
+                    exc_info=True
+                )
+                # 继续运行，不退出
+
+        self.logger.info(f"[Monitor] Alert processing loop exited")
     
     def _check_threshold_rules(self):
         """检查阈值规则"""
@@ -777,14 +851,31 @@ class WorkerMonitor:
     
     def get_stats(self) -> MonitorStats:
         """获取监控器统计信息
-        
+
         Returns:
             MonitorStats: 监控器统计信息
         """
         # 更新统计信息
         self._update_stats()
-        
-        return self._stats
+
+        # 返回副本而非引用，防止外部代码修改内部状态（线程安全）
+        return MonitorStats(
+            monitor_id=self._stats.monitor_id,
+            name=self._stats.name,
+            state=self._stats.state,
+            start_time=self._stats.start_time,
+            uptime=self._stats.uptime,
+            total_metrics_collected=self._stats.total_metrics_collected,
+            total_alerts_generated=self._stats.total_alerts_generated,
+            active_alerts=self._stats.active_alerts,
+            resolved_alerts=self._stats.resolved_alerts,
+            metrics_collection_rate=self._stats.metrics_collection_rate,
+            last_collection_time=self._stats.last_collection_time,
+            monitored_workers=self._stats.monitored_workers,
+            monitored_queues=self._stats.monitored_queues,
+            health_check_rate=self._stats.health_check_rate,
+            auto_recovery_rate=self._stats.auto_recovery_rate
+        )
     
     def get_state(self) -> MonitorState:
         """获取监控器状态

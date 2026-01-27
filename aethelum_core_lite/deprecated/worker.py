@@ -55,6 +55,7 @@ class WorkerStats:
     consecutive_failures: int = 0
     health_score: float = 100.0
     uptime: float = 0.0
+    utilization: float = 0.0  # 当前利用率（0.0-1.0）
 
 
 class AxonWorker(threading.Thread):
@@ -142,56 +143,61 @@ class AxonWorker(threading.Thread):
     
     def run(self):
         """工作器主循环"""
-        self._state = WorkerState.RUNNING
-        self._stats.state = self._state
-        self._stats.start_time = time.time()
-        
+        with self._stats_lock:
+            self._state = WorkerState.RUNNING
+            self._stats.state = self._state
+            self._stats.start_time = time.time()
+
         # 启动健康检查线程
         self._health_check_thread.start()
-        
+
         try:
             while not self._stop_event.is_set():
                 # 检查是否暂停
                 if not self._pause_event.is_set():
                     time.sleep(0.1)
                     continue
-                
+
                 try:
                     # 非阻塞获取神经脉冲
                     impulse = self.input_queue.get(block=False)
                     if impulse is None:
                         time.sleep(0.1)
                         continue
-                    
+
                     # 处理神经脉冲
                     self._process_impulse(impulse)
-                    
-                    # 重置连续失败计数
-                    self._stats.consecutive_failures = 0
-                    
+
+                    # 重置连续失败计数（使用锁保护）
+                    with self._stats_lock:
+                        self._stats.consecutive_failures = 0
+
                 except Empty:
                     # 队列为空，短暂休眠
                     time.sleep(0.1)
                 except Exception as e:
                     # 处理异常
                     self._handle_error(e, None)
-                    
-                    # 检查是否需要进入恢复模式
-                    if self._stats.consecutive_failures >= self.max_consecutive_failures:
-                        self._enter_recovery_mode()
-        
+
+                    # 检查是否需要进入恢复模式（使用锁保护）
+                    with self._stats_lock:
+                        if self._stats.consecutive_failures >= self.max_consecutive_failures:
+                            self._enter_recovery_mode()
+
         finally:
-            self._state = WorkerState.STOPPED
-            self._stats.state = self._state
+            with self._stats_lock:
+                self._state = WorkerState.STOPPED
+                self._stats.state = self._state
     
     def _process_impulse(self, impulse: NeuralImpulse):
         """处理神经脉冲
-        
+
         Args:
             impulse: 神经脉冲对象
         """
         start_time = time.time()
-        self._stats.last_activity = start_time
+        with self._stats_lock:
+            self._stats.last_activity = start_time
         
         try:
             # 验证SINK安全
@@ -280,25 +286,26 @@ class AxonWorker(threading.Thread):
     
     def _handle_error(self, error: Exception, impulse: Optional[NeuralImpulse] = None):
         """处理错误
-        
+
         Args:
             error: 异常对象
             impulse: 相关的神经脉冲对象（可选）
         """
         # 确定错误类型
         error_type = self._determine_error_type(error)
-        
-        # 更新错误统计
+
+        # 更新错误统计（使用锁保护）
         error_type_str = error_type.value
-        self._stats.error_counts[error_type_str] = self._stats.error_counts.get(error_type_str, 0) + 1
-        self._stats.last_error = str(error)
-        self._stats.last_error_time = time.time()
-        self._stats.consecutive_failures += 1
-        
-        # 记录错误
-        self.logger.error(f"Error in worker {self.name}: {error}")
+        with self._stats_lock:
+            self._stats.error_counts[error_type_str] = self._stats.error_counts.get(error_type_str, 0) + 1
+            self._stats.last_error = str(error)
+            self._stats.last_error_time = time.time()
+            self._stats.consecutive_failures += 1
+
+        # 记录错误（使用 repr 防止日志注入）
+        self.logger.error(f"Error in worker {self.name}: {repr(error)}")
         if impulse:
-            self.logger.error(f"Error processing impulse: {impulse.session_id}")
+            self.logger.error(f"Error processing impulse: {repr(impulse.session_id)}")
     
     def _determine_error_type(self, error: Exception) -> ErrorType:
         """确定错误类型
@@ -317,57 +324,62 @@ class AxonWorker(threading.Thread):
         return ErrorType.SYSTEM_ERROR
     
     def _enter_recovery_mode(self):
-        """进入恢复模式"""
-        self._state = WorkerState.RECOVERING
-        self._stats.state = self._state
-        self._stats.recovery_attempts += 1
-        
-        self.logger.warning(f"Worker {self.name} entering recovery mode after {self._stats.consecutive_failures} consecutive failures")
-        
+        """进入恢复模式（带并发保护）"""
+        with self._stats_lock:
+            self._state = WorkerState.RECOVERING
+            self._stats.state = self._state
+            self._stats.recovery_attempts += 1
+            consecutive_failures = self._stats.consecutive_failures
+
+        self.logger.warning(f"Worker {self.name} entering recovery mode after {consecutive_failures} consecutive failures")
+
         # 等待恢复延迟
         time.sleep(self.recovery_delay)
-        
-        # 重置连续失败计数
-        self._stats.consecutive_failures = 0
-        
-        # 恢复到运行状态
-        self._state = WorkerState.RUNNING
-        self._stats.state = self._state
-        
+
+        # 重置连续失败计数和恢复状态（使用锁保护）
+        with self._stats_lock:
+            self._stats.consecutive_failures = 0
+            self._state = WorkerState.RUNNING
+            self._stats.state = self._state
+
         self.logger.info(f"Worker {self.name} recovered and resuming operation")
     
     def _health_check_loop(self):
-        """健康检查循环"""
+        """健康检查循环（带并发保护）"""
         while not self._stop_event.is_set():
             time.sleep(self.health_check_interval)
-            
+
             # 计算健康分数
             self._calculate_health_score()
-            
-            # 检查是否需要干预
-            if self._stats.health_score < 30.0:
-                self.logger.warning(f"Worker {self.name} health score is low: {self._stats.health_score}")
+
+            # 检查是否需要干预（使用锁保护）
+            with self._stats_lock:
+                health_score = self._stats.health_score
+
+            if health_score < 30.0:
+                self.logger.warning(f"Worker {self.name} health score is low: {health_score}")
     
     def _calculate_health_score(self):
-        """计算健康分数"""
-        # 基础分数
-        score = 100.0
-        
-        # 根据成功率调整
-        if self._stats.processed_messages > 0:
-            success_rate = self._stats.success_rate
-            score *= (success_rate / 100.0)
-        
-        # 根据连续失败次数调整
-        if self._stats.consecutive_failures > 0:
-            score -= (self._stats.consecutive_failures * 10)
-        
-        # 根据恢复尝试次数调整
-        if self._stats.recovery_attempts > 0:
-            score -= (self._stats.recovery_attempts * 5)
-        
-        # 确保分数在0-100之间
-        self._stats.health_score = max(0.0, min(100.0, score))
+        """计算健康分数（带并发保护）"""
+        with self._stats_lock:
+            # 基础分数
+            score = 100.0
+
+            # 根据成功率调整
+            if self._stats.processed_messages > 0:
+                success_rate = self._stats.success_rate
+                score *= (success_rate / 100.0)
+
+            # 根据连续失败次数调整
+            if self._stats.consecutive_failures > 0:
+                score -= (self._stats.consecutive_failures * 10)
+
+            # 根据恢复尝试次数调整
+            if self._stats.recovery_attempts > 0:
+                score -= (self._stats.recovery_attempts * 5)
+
+            # 确保分数在0-100之间
+            self._stats.health_score = max(0.0, min(100.0, score))
     
     def _update_stats(self, processing_time: float, success: bool):
         """更新统计信息
@@ -393,23 +405,26 @@ class AxonWorker(threading.Thread):
             self._stats.uptime = time.time() - self._stats.start_time
     
     def pause(self):
-        """暂停工作器"""
+        """暂停工作器（带并发保护）"""
         self._pause_event.clear()
-        self._state = WorkerState.PAUSED
-        self._stats.state = self._state
+        with self._stats_lock:
+            self._state = WorkerState.PAUSED
+            self._stats.state = self._state
         self.logger.info(f"Worker {self.name} paused")
 
     def resume(self):
-        """恢复工作器"""
+        """恢复工作器（带并发保护）"""
         self._pause_event.set()
-        self._state = WorkerState.RUNNING
-        self._stats.state = self._state
+        with self._stats_lock:
+            self._state = WorkerState.RUNNING
+            self._stats.state = self._state
         self.logger.info(f"Worker {self.name} resumed")
 
     def stop(self):
-        """停止工作器"""
-        self._state = WorkerState.STOPPING
-        self._stats.state = self._state
+        """停止工作器（带并发保护）"""
+        with self._stats_lock:
+            self._state = WorkerState.STOPPING
+            self._stats.state = self._state
         self._stop_event.set()
         self.logger.info(f"Worker {self.name} stopping")
     
@@ -444,24 +459,42 @@ class AxonWorker(threading.Thread):
                 recovery_attempts=self._stats.recovery_attempts,
                 consecutive_failures=self._stats.consecutive_failures,
                 health_score=self._stats.health_score,
-                uptime=self._stats.uptime
+                uptime=self._stats.uptime,
+                utilization=self._stats.utilization
             )
     
     def get_state(self) -> WorkerState:
         """获取工作器状态
-        
+
         Returns:
             WorkerState: 工作器状态
         """
         return self._state
-    
+
+    def get_utilization(self) -> float:
+        """获取当前Worker利用率
+
+        利用率 = 处理时间 / 总运行时间
+
+        Returns:
+            float: 利用率（0.0-1.0）
+        """
+        with self._stats_lock:
+            total_time = time.time() - self._stats.start_time
+            if total_time == 0:
+                return 0.0
+            utilization = self._stats.total_processing_time / total_time
+            self._stats.utilization = utilization
+            return utilization
+
     def is_healthy(self) -> bool:
-        """检查工作器是否健康
-        
+        """检查工作器是否健康（带并发保护）
+
         Returns:
             bool: 是否健康
         """
-        return self._stats.health_score >= 50.0
+        with self._stats_lock:
+            return self._stats.health_score >= 50.0
     
     def __str__(self) -> str:
         """返回工作器的字符串表示

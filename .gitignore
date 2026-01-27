@@ -203,3 +203,6 @@ issue.md
 issue_fix_plan.md
 issue_completion_report.md
 .trae/
+**\*.md
+.reviews/**
+.issues/**

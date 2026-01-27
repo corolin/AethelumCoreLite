@@ -1,0 +1,65 @@
+# AethelumCoreLite 配置文件
+
+[system]
+# Worker模式：async（异步）或 thread（同步线程）
+worker_mode = "async"
+
+# 最大Worker数量
+max_workers = 100
+
+# 队列大小
+queue_size = 10000
+
+[monitoring]
+# Prometheus指标导出
+enable_prometheus = false
+
+# Prometheus服务器配置
+prometheus_host = "127.0.0.1"
+prometheus_port = 8000
+
+# OpenTelemetry分布式追踪
+enable_tracing = false
+
+# Jaeger配置
+jaeger_host = "localhost"
+jaeger_port = 6831
+tracing_sample_rate = 0.1
+
+# 指标查询API
+enable_metrics_api = false
+
+[api]
+# Metrics API服务器配置
+metrics_api_host = "127.0.0.1"
+metrics_api_port = 8080
+enable_cors = false
+
+# API密钥认证（可选）
+# ⚠️ 安全警告：
+# 1. 生产环境强烈建议设置API密钥
+# 2. 不要将此文件提交到版本控制系统（已添加到 .gitignore）
+# 3. 使用强密码（至少32个随机字符）
+# 4. 默认仅监听127.0.0.1，不要暴露到公网
+#
+# 推荐配置方式：
+# 方式1 - 使用环境变量（最安全）：
+#   在 .bashrc 或 .zshrc 中添加：
+#   export AETHELUM_API_KEY="your-very-long-random-key-here"
+#   然后在配置文件中使用：
+#   api_key = "${AETHELUM_API_KEY}"
+#
+# 方式2 - 使用配置文件（开发环境）：
+#   生成强密钥：python -c "import secrets; print(secrets.token_urlsafe(32))"
+#   api_key = "生成的密钥填在这里"
+#
+# 示例（取消注释并配置）：
+# api_key = "${AETHELUM_API_KEY}"  # 从环境变量读取（推荐）
+# api_key = ""  # 留空则不需要认证（仅开发环境）
+
+[performance]
+# AsyncIO并发数
+async_io_concurrency = 1000
+
+# Hook超时时间（秒）
+hook_timeout = 30.0

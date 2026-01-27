@@ -8,11 +8,56 @@ import time
 import uuid
 import json
 import zlib
+import gzip
 import hashlib
 from typing import Any, Dict, List, Optional, Union, Callable
 from enum import Enum
 from dataclasses import dataclass, field
 from .protobuf_utils import ProtoBufManager, create_neural_impulse_proto, extract_content_from_impulse
+
+
+# 安全限制常量
+MAX_JSON_SIZE = 10 * 1024 * 1024  # 10MB - 防止 DoS
+MAX_STRING_LENGTH = 1024 * 1024  # 1MB - 单个字符串最大长度
+MAX_NESTING_DEPTH = 100  # 最大嵌套深度
+
+
+def _safe_json_loads(json_str: str) -> Dict[str, Any]:
+    """安全的 JSON 解析，防止反序列化攻击
+
+    Args:
+        json_str: JSON 字符串
+
+    Returns:
+        解析后的字典
+
+    Raises:
+        ValueError: 数据过大或格式无效
+        json.JSONDecodeError: JSON 解析错误
+    """
+    # 检查输入大小
+    if len(json_str.encode('utf-8')) > MAX_JSON_SIZE:
+        raise ValueError(
+            f"JSON data too large: {len(json_str.encode('utf-8'))} bytes "
+            f"(max: {MAX_JSON_SIZE} bytes)"
+        )
+
+    # 使用标准 JSON 解析器（Python 的 json.loads 是安全的，不会执行任意代码）
+    # 但我们仍然需要限制数据大小来防止 DoS
+    try:
+        data = json.loads(json_str)
+    except json.JSONDecodeError as e:
+        raise json.JSONDecodeError(
+            f"Invalid JSON data: {e.msg}",
+            e.doc,
+            e.pos
+        )
+
+    # 验证返回类型
+    if not isinstance(data, dict):
+        raise ValueError(f"Expected JSON object, got {type(data).__name__}")
+
+    return data
 
 
 class MessagePriority(Enum):
@@ -246,12 +291,12 @@ class NeuralImpulse:
 
     @classmethod
     def from_json(cls, json_str: str) -> 'NeuralImpulse':
-        """从JSON字符串创建神经脉冲"""
-        data = json.loads(json_str)
+        """从JSON字符串创建神经脉冲（使用安全的 JSON 解析）"""
+        data = _safe_json_loads(json_str)
         return cls.from_dict(data)
 
     def _compress_content(self) -> None:
-        """压缩内容"""
+        """压缩内容并计算哈希（仅一次）"""
         if self.content is None:
             return
 
@@ -259,16 +304,18 @@ class NeuralImpulse:
         content_str = json.dumps(self.content, ensure_ascii=False)
         content_bytes = content_str.encode('utf-8')
 
+        # 先计算哈希（在压缩前）
+        if self._content_hash is None:
+            self._content_hash = hashlib.sha256(content_bytes).hexdigest()
+
         # 根据压缩类型进行压缩
         if self.compression == CompressionType.ZLIB:
             self._compressed_content = zlib.compress(content_bytes)
         elif self.compression == CompressionType.GZIP:
-            self._compressed_content = zlib.compress(content_bytes, level=9)  # GZIP使用ZLIB的最高压缩级别
+            # 使用 gzip 模块进行 GZIP 格式压缩（RFC 1952）
+            self._compressed_content = gzip.compress(content_bytes, compresslevel=9)
         else:
             self._compressed_content = content_bytes
-
-        # 计算内容哈希
-        self._content_hash = hashlib.sha256(content_bytes).hexdigest()
 
     def _decompress_content(self) -> Any:
         """解压内容"""
@@ -276,13 +323,24 @@ class NeuralImpulse:
             return self.content
 
         # 根据压缩类型进行解压
-        if self.compression == CompressionType.ZLIB or self.compression == CompressionType.GZIP:
+        if self.compression == CompressionType.ZLIB:
             content_bytes = zlib.decompress(self._compressed_content)
+        elif self.compression == CompressionType.GZIP:
+            # 使用 gzip 模块进行 GZIP 格式解压
+            content_bytes = gzip.decompress(self._compressed_content)
         else:
             content_bytes = self._compressed_content
 
-        # 将字节转换为JSON字符串，然后解析为对象
+        # 将字节转换为JSON字符串，然后解析为对象（使用安全解析）
         content_str = content_bytes.decode('utf-8')
+
+        # 检查内容大小（防止 DoS）
+        if len(content_str.encode('utf-8')) > MAX_JSON_SIZE:
+            raise ValueError(
+                f"Compressed content too large after decompression: "
+                f"{len(content_str.encode('utf-8'))} bytes (max: {MAX_JSON_SIZE} bytes)"
+            )
+
         return json.loads(content_str)
 
     def get_content(self) -> Any:
@@ -310,9 +368,12 @@ class NeuralImpulse:
             self._compress_content()
 
     def get_content_hash(self) -> Optional[str]:
-        """获取内容哈希"""
+        """获取内容哈希
+
+        优化：如果已有哈希则直接返回，否则计算并缓存
+        """
         if self._content_hash is None and self.content is not None:
-            # 计算内容哈希
+            # 计算并缓存内容哈希
             content_str = json.dumps(self.content, ensure_ascii=False)
             content_bytes = content_str.encode('utf-8')
             self._content_hash = hashlib.sha256(content_bytes).hexdigest()
@@ -543,19 +604,41 @@ class NeuralImpulse:
     @classmethod
     def from_protobuf(cls, proto_impulse: Any) -> 'NeuralImpulse':
         """
-        从ProtoBuf创建神经脉冲
+        从ProtoBuf创建神经脉冲（带安全验证）
 
         Args:
             proto_impulse: NeuralImpulseProto消息对象
 
         Returns:
             NeuralImpulse实例
+
+        Raises:
+            ValueError: 消息过大或验证失败
+            RuntimeError: ProtoBuf 不可用
         """
         if not ProtoBufManager.is_available():
             raise RuntimeError("ProtoBuf不可用！请先编译protobuf_schema.proto")
 
+        # 安全检查1: 验证消息大小（防止 DoS）
+        if hasattr(proto_impulse, 'ByteSize'):
+            proto_size = proto_impulse.ByteSize()
+            if proto_size > MAX_JSON_SIZE:  # 使用相同的限制（10MB）
+                raise ValueError(
+                    f"ProtoBuf message too large: {proto_size} bytes "
+                    f"(max: {MAX_JSON_SIZE} bytes)"
+                )
+
+        # 安全检查2: 验证必要字段
+        required_fields = ['session_id', 'action_intent']
+        for field in required_fields:
+            if not hasattr(proto_impulse, field) or not getattr(proto_impulse, field):
+                raise ValueError(f"Missing required ProtoBuf field: {field}")
+
         # 转换ProtoBuf消息为字典
-        impulse_dict = ProtoBufManager.to_dict(proto_impulse)
+        try:
+            impulse_dict = ProtoBufManager.to_dict(proto_impulse)
+        except Exception as e:
+            raise ValueError(f"Failed to parse ProtoBuf message: {repr(e)}")
 
         # 处理枚举类型
         priority = MessagePriority.NORMAL

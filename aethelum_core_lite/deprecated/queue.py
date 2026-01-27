@@ -147,6 +147,20 @@ class SynapticQueue:
             return False
 
         # 为消息添加唯一ID和时间戳
+        #
+        # 消息唯一性保证：
+        # ===================
+        # 当前实现：uuid.uuid4()
+        # - 122位随机数
+        # - 冲突概率：~1/2^122
+        # - 相当于：每秒生成10亿个UUID，连续运行85年才会有50%概率发生冲突
+        # - 实际应用中冲突概率可忽略不计
+        #
+        # 如果您的应用场景需要更高的确定性，可考虑：
+        # 1. 数据库唯一约束（防止重复）
+        # 2. 布隆过滤器（快速检测重复）
+        # 3. 雪花算法（分布式系统）
+        # 4. 组合键：timestamp + hostname + sequence
         message_id = str(uuid.uuid4())
         impulse.metadata["message_id"] = message_id
         impulse.metadata["queue_timestamp"] = time.time()
@@ -177,12 +191,14 @@ class SynapticQueue:
         except queue.Full:
             return False
     
-    def get(self, block: bool = True, timeout: Optional[float] = None) -> Optional[NeuralImpulse]:
+    def get(self, block: bool = True, timeout: Optional[float] = None,
+            max_retries: int = 100) -> Optional[NeuralImpulse]:
         """从队列获取神经脉冲
 
         Args:
             block: 是否阻塞等待队列有消息
             timeout: 阻塞超时时间
+            max_retries: 最大重试次数（防止连续过期消息导致无限循环）
 
         Returns:
             NeuralImpulse: 神经脉冲对象，队列为空时返回None
@@ -190,16 +206,35 @@ class SynapticQueue:
         if self._closed:
             return None
 
-        # 先从队列获取消息（可能阻塞，不在锁内）
-        try:
-            priority, timestamp, message_id, impulse = self._queue.get(block=block, timeout=timeout)
-        except queue.Empty:
-            return None
+        # 使用循环代替递归，限制最大重试次数
+        retry_count = 0
 
-        # 检查消息是否过期
-        if self._is_expired(impulse):
+        while retry_count < max_retries:
+            # 先从队列获取消息（可能阻塞，不在锁内）
+            try:
+                priority, timestamp, message_id, impulse = self._queue.get(
+                    block=block,
+                    timeout=timeout
+                )
+            except queue.Empty:
+                return None
+
+            # 检查消息是否过期
+            if not self._is_expired(impulse):
+                # 消息未过期，正常返回
+                break
+
+            # 消息已过期，跳过并继续
             self._queue.task_done()
-            return self.get(block, timeout)  # 递归获取下一个消息
+            retry_count += 1
+
+            # 如果重试次数过多，记录警告
+            if retry_count >= max_retries:
+                self.logger.warning(
+                    f"Queue {self.queue_id}: Reached max retries ({max_retries}) "
+                    f"while skipping expired messages"
+                )
+                return None
 
         processing_start = time.time()
 
@@ -305,7 +340,17 @@ class SynapticQueue:
             # 更新活动时间
             self._stats.active_time = time.time() - self._start_time
             self._stats.queue_size = self._queue.qsize()
-            return self._stats
+            # 返回副本而非引用，防止外部代码修改内部状态（线程安全）
+            return QueueStats(
+                total_messages=self._stats.total_messages,
+                failed_messages=self._stats.failed_messages,
+                processed_messages=self._stats.processed_messages,
+                active_time=self._stats.active_time,
+                last_activity=self._stats.last_activity,
+                average_processing_time=self._stats.average_processing_time,
+                queue_size=self._stats.queue_size,
+                priority_distribution=dict(self._stats.priority_distribution)
+            )
     
     def get_message_by_id(self, message_id: str) -> Optional[NeuralImpulse]:
         """根据消息ID获取消息
@@ -599,20 +644,25 @@ class SynapticQueue:
             raise
 
     def _close_wal_logs(self):
-        """关闭WAL日志文件"""
-        try:
-            if self._log1_file:
-                # 关闭前确保最后一次flush
-                self._log1_file.flush()
-                self._log1_file.close()
-                self._log1_file = None
-            if self._log2_file:
-                # 关闭前确保最后一次flush
-                self._log2_file.flush()
-                self._log2_file.close()
-                self._log2_file = None
-        except Exception as e:
-            self.logger.error(f"Queue {self.queue_id}: Error closing WAL logs: {e}")
+        """关闭WAL日志文件
+
+        安全改进：
+        - 分别处理每个文件的 flush 和 close，避免一个文件失败影响另一个
+        - 确保 close() 一定被调用，防止文件句柄泄漏
+        """
+        for attr_name, log_name in [('_log1_file', 'log1'), ('_log2_file', 'log2')]:
+            log_file = getattr(self, attr_name)
+            if log_file:
+                try:
+                    log_file.flush()
+                except Exception as e:
+                    self.logger.warning(f"Queue {self.queue_id}: Failed to flush {log_name}: {e}")
+                try:
+                    log_file.close()
+                except Exception as e:
+                    self.logger.error(f"Queue {self.queue_id}: Failed to close {log_name}: {e}")
+                finally:
+                    setattr(self, attr_name, None)
 
     def _cleanup_loop(self):
         """后台清理循环，定期清理已处理消息"""
@@ -642,9 +692,18 @@ class SynapticQueue:
         self.logger.info(f"Queue {self.queue_id}: Background cleanup loop exited")
 
     def _cleanup_logs(self):
-        """清理已处理消息：读取log2，从log1中删除已处理的消息"""
+        """清理已处理消息：读取log2，从log1中删除已处理的消息
+
+        安全改进：
+        1. 使用原子操作（临时文件 + fsync）
+        2. 添加备份机制防止数据丢失
+        3. 失败时自动恢复
+        """
         if not os.path.exists(self._log2_path):
             return
+
+        temp_log1_path = None
+        original_log1_backup = None
 
         try:
             # 读取log2中所有已处理的消息ID
@@ -676,7 +735,14 @@ class SynapticQueue:
                 open(self._log2_path, 'w' if not MSGPACK_AVAILABLE else 'wb').close()
                 return
 
-            temp_log1_path = self._log1_path + '.tmp'
+            # 创建临时文件在同一文件系统（确保原子替换）
+            import tempfile
+            temp_fd, temp_log1_path = tempfile.mkstemp(
+                dir=os.path.dirname(self._log1_path),
+                prefix=os.path.basename(self._log1_path) + '.tmp'
+            )
+            os.close(temp_fd)
+
             kept_count = 0
 
             with open(self._log1_path, 'rb' if MSGPACK_AVAILABLE else 'r', encoding=None if MSGPACK_AVAILABLE else 'utf-8') as f_in, \
@@ -722,11 +788,30 @@ class SynapticQueue:
                         except json.JSONDecodeError:
                             continue
 
-            # 替换log1文件
-            os.replace(temp_log1_path, self._log1_path)
+            # 关键：确保数据落盘
+            f_out.flush()
+            os.fsync(f_out.fileno())
 
-            # 清空log2文件
-            open(self._log2_path, 'w' if not MSGPACK_AVAILABLE else 'wb').close()
+            # 备份原始文件（以防万一）
+            original_log1_backup = self._log1_path + '.backup'
+            if os.path.exists(self._log1_path):
+                import shutil
+                shutil.copy2(self._log1_path, original_log1_backup)
+
+            # 原子替换 log1 文件
+            os.replace(temp_log1_path, self._log1_path)
+            # 设置文件权限为仅所有者可读写（防止其他用户读取敏感数据）
+            os.chmod(self._log1_path, 0o600)
+
+            # 清空 log2 文件
+            with open(self._log2_path, 'w' if not MSGPACK_AVAILABLE else 'wb') as f:
+                if MSGPACK_AVAILABLE:
+                    f.flush()
+                    os.fsync(f.fileno())
+
+            # 删除备份（成功后）
+            if original_log1_backup and os.path.exists(original_log1_backup):
+                os.remove(original_log1_backup)
 
             self.logger.info(
                 f"Queue {self.queue_id}: Cleanup completed, "
@@ -734,7 +819,28 @@ class SynapticQueue:
             )
 
         except Exception as e:
-            self.logger.error(f"Queue {self.queue_id}: Error during log cleanup: {e}")
+            self.logger.error(f"Queue {self.queue_id}: Error during log cleanup: {e}", exc_info=True)
+
+            # 清理临时文件
+            if temp_log1_path and os.path.exists(temp_log1_path):
+                try:
+                    os.remove(temp_log1_path)
+                except Exception:
+                    pass
+
+            # 如果有备份，恢复原始文件
+            if original_log1_backup and os.path.exists(original_log1_backup):
+                try:
+                    if os.path.exists(self._log1_path):
+                        os.remove(self._log1_path)
+                    os.replace(original_log1_backup, self._log1_path)
+                    # 设置文件权限为仅所有者可读写
+                    os.chmod(self._log1_path, 0o600)
+                    self.logger.info(f"Queue {self.queue_id}: Restored log1 from backup after cleanup failure")
+                except Exception as restore_error:
+                    self.logger.error(
+                        f"Queue {self.queue_id}: Failed to restore log1 backup: {restore_error}"
+                    )
 
     def _load_from_log1(self):
         """从log1恢复未处理的消息到队列"""

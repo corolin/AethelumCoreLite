@@ -343,6 +343,11 @@ queue = SynapticQueue(
 
 ## 安全特性
 
+- **Metrics API认证**: 强制要求API密钥认证，禁止无认证访问
+  - 所有API请求必须提供有效的Bearer Token
+  - 在配置文件中设置`api_key`（参见`config.example.toml`）
+  - 生产环境强制要求认证
+
 - **可选审核**: 提供内容安全审查示例，可根据需要启用
 - **ProtoBuf支持**: 可选的消息序列化和加密传输
 - **灵活架构**: 支持自定义安全验证机制

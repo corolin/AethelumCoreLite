@@ -686,12 +686,13 @@ class NeuralSomaRouter:
             for queue_name, workers in self._workers.items():
                 worker_stats[queue_name] = [worker.get_stats() for worker in workers]
                 total_workers += len(workers)
-                
+
             # 计算性能指标
             performance_stats = self._calculate_performance_stats()
 
+            # 返回副本而非引用，防止外部代码修改内部状态（线程安全）
             return {
-                **self._stats,
+                **self._stats,  # 这里复制基础统计信息
                 'is_active': self._router_active,
                 'uptime_seconds': uptime,
                 'runtime_seconds': runtime,
@@ -700,9 +701,9 @@ class NeuralSomaRouter:
                 'worker_count': total_workers,
                 'total_queue_size': total_queue_size,
                 'mandatory_queues_present': set(self.MANDATORY_QUEUES.keys()).issubset(set(self._queues.keys())),
-                'queues': queue_stats,
-                'workers': worker_stats,
-                'performance': performance_stats
+                'queues': dict(queue_stats),  # 复制队列统计字典
+                'workers': dict(worker_stats),  # 复制工作器统计字典
+                'performance': dict(performance_stats)  # 复制性能统计字典
             }
 
     def _calculate_performance_stats(self) -> Dict[str, Any]:
