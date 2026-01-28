@@ -10,14 +10,11 @@ import time
 import threading
 import json
 import os
-from typing import Any, Dict, List, Optional, Union, Callable, Type
+from typing import Any, Dict, List, Optional, Union, Callable, Type, Tuple
 from dataclasses import dataclass, field, asdict
 from enum import Enum
 from datetime import datetime
 from pathlib import Path
-import smtplib
-from email.mime.text import MimeText
-from email.mime.multipart import MimeMultipart
 
 from .structured_logger import get_structured_logger, LogLevel
 
@@ -550,116 +547,6 @@ class ErrorReporter:
             'resolved_count': resolved_count,
             'resolution_rate': resolution_rate
         }
-
-
-class EmailErrorHandler:
-    """邮件错误处理器"""
-    
-    def __init__(self, smtp_server: str, smtp_port: int, username: str,
-                 password: str, from_email: str, to_emails: List[str]):
-        self.smtp_server = smtp_server
-        self.smtp_port = smtp_port
-        self.username = username
-        self.password = password
-        self.from_email = from_email
-        self.to_emails = to_emails
-        
-        # 严重程度过滤
-        self.min_severity = ErrorSeverity.HIGH
-        self.cooldown = 300  # 5分钟冷却
-        self.last_sent_time = {}
-    
-    def __call__(self, error_report: ErrorReport):
-        """处理错误报告"""
-        # 检查严重程度
-        if error_report.severity.value not in [s.value for s in [ErrorSeverity.HIGH, ErrorSeverity.CRITICAL]]:
-            return
-        
-        # 检查冷却时间
-        current_time = time.time()
-        error_type = f"{error_report.category.value}:{error_report.exception_type}"
-        
-        if (error_type in self.last_sent_time and 
-            current_time - self.last_sent_time[error_type] < self.cooldown):
-            return
-        
-        # 发送邮件
-        try:
-            self._send_email(error_report)
-            self.last_sent_time[error_type] = current_time
-        except Exception as e:
-            # 邮件发送失败不应该影响主程序
-            pass
-    
-    def _send_email(self, error_report: ErrorReport):
-        """发送邮件"""
-        # 创建邮件
-        msg = MimeMultipart()
-        msg['From'] = self.from_email
-        msg['To'] = ', '.join(self.to_emails)
-        msg['Subject'] = f"[{error_report.severity.value.upper()}] {self.app_name} 错误报告"
-        
-        # 邮件正文
-        body = self._create_email_body(error_report)
-        msg.attach(MimeText(body, 'html', 'utf-8'))
-        
-        # 发送邮件
-        with smtplib.SMTP(self.smtp_server, self.smtp_port) as server:
-            server.starttls()
-            server.login(self.username, self.password)
-            server.send_message(msg)
-    
-    def _create_email_body(self, error_report: ErrorReport) -> str:
-        """创建邮件正文"""
-        html = f"""
-        <html>
-        <head>
-            <style>
-                body {{ font-family: Arial, sans-serif; }}
-                .header {{ background-color: #f44336; color: white; padding: 10px; }}
-                .content {{ padding: 20px; }}
-                .field {{ margin-bottom: 10px; }}
-                .label {{ font-weight: bold; }}
-                .value {{ margin-left: 10px; }}
-                .stack-trace {{ background-color: #f5f5f5; padding: 10px; font-family: monospace; }}
-            </style>
-        </head>
-        <body>
-            <div class="header">
-                <h2>{error_report.title}</h2>
-                <p>严重程度: {error_report.severity.value.upper()}</p>
-            </div>
-            <div class="content">
-                <div class="field">
-                    <span class="label">错误ID:</span>
-                    <span class="value">{error_report.error_id}</span>
-                </div>
-                <div class="field">
-                    <span class="label">类别:</span>
-                    <span class="value">{error_report.category.value}</span>
-                </div>
-                <div class="field">
-                    <span class="label">时间:</span>
-                    <span class="value">{datetime.fromtimestamp(error_report.timestamp).strftime('%Y-%m-%d %H:%M:%S')}</span>
-                </div>
-                <div class="field">
-                    <span class="label">消息:</span>
-                    <span class="value">{error_report.message}</span>
-                </div>
-                <div class="field">
-                    <span class="label">异常类型:</span>
-                    <span class="value">{error_report.exception_type}</span>
-                </div>
-                {f'''<div class="field">
-                    <span class="label">堆栈跟踪:</span>
-                    <div class="stack-trace">{error_report.stack_trace}</div>
-                </div>''' if error_report.stack_trace else ''}
-            </div>
-        </body>
-        </html>
-        """
-        return html
-
 
 # 全局错误报告器
 _global_error_reporter = None

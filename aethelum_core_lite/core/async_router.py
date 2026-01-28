@@ -6,15 +6,14 @@
 
 import asyncio
 import logging
-from typing import Dict, List, Optional, Any, Callable, Union
+from typing import Dict, List, Optional, Any, Callable, Union, Tuple
 from dataclasses import dataclass, field
 import time
 
 from .async_worker import AsyncAxonWorker
-from .async_queue import AsyncSynapticQueue
+from .async_queue import AsyncSynapticQueue, QueuePriority
 from .async_hooks import AsyncHookType, AsyncBaseHook
 from .message import NeuralImpulse
-from .queue import QueuePriority
 
 logger = logging.getLogger(__name__)
 

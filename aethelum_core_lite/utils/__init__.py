@@ -67,7 +67,7 @@ from .validation_performance import (
 # 错误处理和报告
 from .error_reporting import (
     ErrorSeverity, ErrorCategory, ErrorContext, ErrorReport, ErrorClassifier,
-    ErrorReporter, EmailErrorHandler, get_error_reporter, report_error,
+    ErrorReporter, get_error_reporter, report_error,
     report_custom_error
 )
 
@@ -118,6 +118,6 @@ __all__ = [
     
     # 错误处理和报告
     "ErrorSeverity", "ErrorCategory", "ErrorContext", "ErrorReport", "ErrorClassifier",
-    "ErrorReporter", "EmailErrorHandler", "get_error_reporter", "report_error",
+    "ErrorReporter", "get_error_reporter", "report_error",
     "report_custom_error"
 ]

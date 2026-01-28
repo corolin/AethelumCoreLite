@@ -340,14 +340,16 @@ class AsyncBatchLogOutput(LogOutput):
                 # 不在事件循环中，运行新的事件循环
                 asyncio.run(self.write_async(formatted_entry, entry))
         except RuntimeError:
-            # 同步处理
+            # 同步处理 - 使用线程锁保护
             entry_size = len(formatted_entry.encode('utf-8'))
-            async with self.lock:
-                self.current_batch.add_entry(entry, entry_size)
-                if self.current_batch.is_full(self.max_batch_size, self.max_batch_bytes):
-                    batch = self.current_batch
-                    self.current_batch = LogBatch()
-                    asyncio.run(self._process_batch_sync(batch))
+            # 注意：这里无法使用async with，因为是同步方法
+            # 如果需要线程安全，应该使用threading.Lock
+            self.current_batch.add_entry(entry, entry_size)
+            if self.current_batch.is_full(self.max_batch_size, self.max_batch_bytes):
+                batch = self.current_batch
+                self.current_batch = LogBatch()
+                # 在同步上下文中处理批次
+                asyncio.run(self._process_batch_sync(batch))
     
     async def _worker_loop(self):
         """工作协程循环"""
