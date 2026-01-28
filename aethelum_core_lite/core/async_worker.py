@@ -222,6 +222,9 @@ class AsyncAxonWorker:
         """处理神经脉冲（核心I/O密集型逻辑）"""
         start_time = time.time()
 
+        # 获取 message_id（用于WAL追踪）
+        message_id = impulse.message_id if hasattr(impulse, 'message_id') else None
+
         try:
             # Q_AUDIT 安全验证
             self._validate_sink_security(impulse)
@@ -238,6 +241,10 @@ class AsyncAxonWorker:
             # 异步更新指标到内存
             processing_time = time.time() - start_time
             await self._update_metrics_async(success=True, duration=processing_time)
+
+            # 标记消息已处理（WAL log2）
+            if message_id:
+                await self.input_queue.mark_message_processed(message_id)
 
         except Exception as e:
             # 映射错误类型

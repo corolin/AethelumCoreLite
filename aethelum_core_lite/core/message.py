@@ -119,7 +119,8 @@ class NeuralImpulse:
         expires_at: Optional[float] = None,
         compression: CompressionType = CompressionType.NONE,
         version: str = CURRENT_VERSION,
-        status: MessageStatus = MessageStatus.CREATED
+        status: MessageStatus = MessageStatus.CREATED,
+        message_id: Optional[str] = None
     ):
         """
         初始化神经脉冲
@@ -137,7 +138,11 @@ class NeuralImpulse:
             compression: 内容压缩类型
             version: 消息格式版本
             status: 消息状态
+            message_id: 消息唯一标识符（用于WAL追踪），自动生成
         """
+        # 消息唯一标识符（WAL 追踪）
+        self.message_id: str = message_id or str(uuid.uuid4())
+
         self.session_id: str = session_id or str(uuid.uuid4())
         self.action_intent: str = action_intent
         self.source_agent: str = source_agent
@@ -217,8 +222,9 @@ class NeuralImpulse:
         """转换为字典格式"""
         # 获取内容，如果是压缩的则先解压
         content = self.get_content()
-        
+
         return {
+            "message_id": self.message_id,
             "session_id": self.session_id,
             "action_intent": self.action_intent,
             "source_agent": self.source_agent,
@@ -272,7 +278,8 @@ class NeuralImpulse:
             expires_at=data.get("expires_at"),
             compression=compression,
             version=data.get("version", cls.CURRENT_VERSION),
-            status=status
+            status=status,
+            message_id=data.get("message_id")  # 支持反序列化 message_id
         )
 
         # 设置时间戳

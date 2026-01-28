@@ -155,6 +155,9 @@ class AsyncSynapticQueue:
         """异步放入消息（支持优先级）"""
         priority_item = PriorityItem(priority.value, item)
 
+        # 获取消息的 message_id
+        message_id = item.message_id if hasattr(item, 'message_id') else str(uuid.uuid4())
+
         try:
             if timeout:
                 await asyncio.wait_for(
@@ -167,9 +170,8 @@ class AsyncSynapticQueue:
             # 异步更新指标到内存
             await self._update_metrics_async(dropped=False)
 
-            # WAL持久化
+            # WAL持久化 - 使用 impulse.message_id
             if self._wal_writer:
-                message_id = str(uuid.uuid4())
                 await self._wal_writer.write_log1(message_id, priority.value, item)
 
             return True
