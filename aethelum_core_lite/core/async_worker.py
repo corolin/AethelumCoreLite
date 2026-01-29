@@ -211,7 +211,7 @@ class AsyncAxonWorker:
                 continue  # 超时继续
             except Exception as e:
                 logger.error(f"[Worker] {self.name} error in _run_loop: {e}")
-                async with self._stats_lock:
+                with self._stats_lock:
                     self._consecutive_failures += 1
 
                     if self._consecutive_failures >= self.max_consecutive_failures:
@@ -254,7 +254,7 @@ class AsyncAxonWorker:
             logger.error(f"[Worker] {self.name} failed to process impulse: {e}")
 
             # 更新错误统计
-            async with self._stats_lock:
+            with self._stats_lock:
                 error_type_str = error_type.value if error_type else "unknown"
                 self._stats.error_counts[error_type_str] = self._stats.error_counts.get(error_type_str, 0) + 1
                 self._stats.last_error = str(e)
@@ -271,7 +271,7 @@ class AsyncAxonWorker:
 
     async def _update_metrics_async(self, success: bool, duration: float):
         """异步更新指标到内存（带并发保护）"""
-        async with self._stats_lock:
+        with self._stats_lock:
             if success:
                 self._stats.processed_messages += 1
                 self._stats.total_processing_time += duration
@@ -439,7 +439,7 @@ class AsyncAxonWorker:
                 await self._calculate_health_score()
 
                 # 检查是否需要干预（使用锁保护）
-                async with self._stats_lock:
+                with self._stats_lock:
                     health_score = self._stats.health_score
 
                 if health_score < 30.0:
@@ -453,7 +453,7 @@ class AsyncAxonWorker:
 
     async def _calculate_health_score(self):
         """计算健康分数（带并发保护）"""
-        async with self._stats_lock:
+        with self._stats_lock:
             # 基础分数
             score = 100.0
 
@@ -475,7 +475,7 @@ class AsyncAxonWorker:
 
     async def get_stats(self) -> AsyncWorkerStats:
         """获取统计信息（从内存，返回副本防止外部修改）"""
-        async with self._stats_lock:
+        with self._stats_lock:
             # 使用 replace 创建副本，避免外部修改内部状态
             return replace(
                 self._stats,
