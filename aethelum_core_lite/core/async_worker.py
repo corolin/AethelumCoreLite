@@ -6,6 +6,7 @@
 
 import asyncio
 import logging
+import threading
 import time
 import uuid
 from typing import Optional, List, TYPE_CHECKING
@@ -117,8 +118,8 @@ class AsyncAxonWorker:
         )
         self._consecutive_failures = 0
 
-        # 保护统计信息的并发访问
-        self._stats_lock = asyncio.Lock()
+        # 保护统计信息的并发访问（使用 threading.Lock 因为 get_utilization 是同步方法）
+        self._stats_lock = threading.Lock()
 
         # 错误类型映射
         self._error_type_mapping = {
@@ -490,26 +491,13 @@ class AsyncAxonWorker:
         Returns:
             float: 利用率（0.0-1.0）
         """
-        # 获取 _stats_lock 的方式需要适配
-        if hasattr(self, '_stats_lock'):
-            # 使用同步方式获取锁（如果可用）
-            import threading
-            if isinstance(self._stats_lock, threading.Lock):
-                with self._stats_lock:
-                    total_time = time.time() - self._stats.start_time
-                    if total_time == 0:
-                        return 0.0
-                    utilization = self._stats.total_processing_time / total_time
-                    self._stats.utilization = utilization
-                    return utilization
-
-        # 异步版本：直接访问（假设调用方已经持有锁或状态是线程安全的）
-        total_time = time.time() - self._stats.start_time
-        if total_time == 0:
-            return 0.0
-        utilization = self._stats.total_processing_time / total_time
-        self._stats.utilization = utilization
-        return utilization
+        with self._stats_lock:
+            total_time = time.time() - self._stats.start_time
+            if total_time == 0:
+                return 0.0
+            utilization = self._stats.total_processing_time / total_time
+            self._stats.utilization = utilization
+            return utilization
 
     @property
     def state(self) -> AsyncWorkerState:

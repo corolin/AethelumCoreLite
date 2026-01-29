@@ -680,7 +680,7 @@ class AsyncNeuralSomaRouter:
                     # 遍历所有Worker
                     for worker_id, worker in list(self._workers.items()):
                         util = worker.get_utilization()
-                        queue_name = worker.input_queue.name
+                        queue_name = worker.input_queue.queue_id
                         self.update_worker_utilization(queue_name, util)
 
                     await asyncio.sleep(interval)
