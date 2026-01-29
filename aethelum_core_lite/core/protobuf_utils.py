@@ -16,6 +16,7 @@ import google.protobuf.json_format as json_format
 from google.protobuf.message import Message
 from google.protobuf.struct_pb2 import Struct, Value
 from google.protobuf.json_format import ParseError
+from . import protobuf_schema_pb2
 
 from .protobuf_schema_pb2 import (
     NeuralImpulseProto,
