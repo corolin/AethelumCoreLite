@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "aethelum-core-lite"
-version = "1.0.0"
+version = "1.0.1"
 description = "模拟树神经系统的通信框架"
 readme = "README.md"
 license = {text = "MIT"}
