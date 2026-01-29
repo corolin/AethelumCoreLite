@@ -17,13 +17,30 @@ from .structured_logger import (
     close_all_loggers, get_logging_stats
 )
 
-# 日志级别管理
-from .log_level_manager import (
-    LogLevelRule, LogCondition, LogLevelManager, DynamicStructuredLogger,
-    get_log_level_manager, create_dynamic_logger, load_log_level_config,
-    set_temp_log_level, set_error_log_mode, set_debug_log_mode,
-    get_effective_log_level, update_log_context
-)
+# 日志级别管理（需要 pyyaml 和 watchdog，属于可选依赖）
+try:
+    from .log_level_manager import (
+        LogLevelRule, LogCondition, LogLevelManager, DynamicStructuredLogger,
+        get_log_level_manager, create_dynamic_logger, load_log_level_config,
+        set_temp_log_level, set_error_log_mode, set_debug_log_mode,
+        get_effective_log_level, update_log_context
+    )
+    _HAS_LOG_LEVEL_MANAGER = True
+except ImportError:
+    # 如果没有安装 pyyaml 和 watchdog，设置为 None
+    LogLevelRule = None
+    LogCondition = None
+    LogLevelManager = None
+    DynamicStructuredLogger = None
+    get_log_level_manager = None
+    create_dynamic_logger = None
+    load_log_level_config = None
+    set_temp_log_level = None
+    set_error_log_mode = None
+    set_debug_log_mode = None
+    get_effective_log_level = None
+    update_log_context = None
+    _HAS_LOG_LEVEL_MANAGER = False
 
 # 日志性能优化
 from .log_performance import (

@@ -4,15 +4,15 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "aethelum-core-lite"
-version = "1.0.1"
+version = "1.0.2"
 description = "模拟树神经系统的通信框架"
 readme = "README.md"
 license = {text = "MIT"}
 authors = [
-    {name = "Aethelum Team", email = "team@aethelum.ai"}
+    {name = "Aethelum Team", email = "aethelum@syrkos.com"}
 ]
 maintainers = [
-    {name = "Aethelum Team", email = "team@aethelum.ai"}
+    {name = "Aethelum Team", email = "aethelum@syrkos.com"}
 ]
 keywords = [
     "neural-network",
@@ -42,8 +42,6 @@ dependencies = [
     "requests>=2.25.0",
     "protobuf>=3.20.0",
     "toml>=0.10.2",
-    "pyyaml>=6.0",
-    "watchdog>=3.0.0",
 ]
 
 [project.optional-dependencies]
@@ -61,6 +59,10 @@ docs = [
 performance = [
     "msgpack>=1.0.0",
 ]
+logging = [
+    "pyyaml>=6.0",
+    "watchdog>=3.0.0",
+]
 monitoring = [
     "prometheus-client>=0.19.0",
     "opentelemetry-api>=1.20.0",
@@ -72,7 +74,7 @@ api = [
     "uvicorn[standard]>=0.27.0",
 ]
 all = [
-    "aethelum-core-lite[dev,docs,performance,monitoring,api]",
+    "aethelum-core-lite[dev,docs,performance,logging,monitoring,api]",
 ]
 
 [project.urls]
