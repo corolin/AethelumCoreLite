@@ -736,9 +736,9 @@ class AsyncWorkerMonitor:
         async with self._metrics_lock:
             return dict(self._current_metrics)
 
-    def add_metric(self, name: str, value: float, metric_type: MetricType,
-                   labels: Optional[Dict[str, str]] = None,
-                   unit: str = "", description: str = ""):
+    async def add_metric(self, name: str, value: float, metric_type: MetricType,
+                        labels: Optional[Dict[str, str]] = None,
+                        unit: str = "", description: str = ""):
         """
         添加或更新指标（与同步版本对齐）
 
@@ -760,14 +760,13 @@ class AsyncWorkerMonitor:
             description=description
         )
 
-        # 这是同步方法，但会在收集循环中被调用
-        # 使用 asyncio.Lock 可能会有问题，所以在实际的异步环境中
-        # 应该使用异步版本或确保在正确的上下文中调用
-        self._current_metrics[name] = metric
+        # 更新当前指标
+        async with self._metrics_lock:
+            self._current_metrics[name] = metric
 
-        # 添加到历史记录
-        if name not in self._metrics_history:
-            self._metrics_history[name] = deque(maxlen=self.max_metrics_history)
-        self._metrics_history[name].append(value)
+            # 添加到历史记录
+            if name not in self._metrics_history:
+                self._metrics_history[name] = deque(maxlen=self.max_metrics_history)
+            self._metrics_history[name].append(value)
 
         logger.debug(f"[Monitor] Metric added: {name}={value}")
