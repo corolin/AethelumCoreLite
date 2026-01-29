@@ -611,14 +611,14 @@ class AsyncNeuralSomaRouter:
             "performance": self._performance_metrics
         }
 
-    def update_worker_utilization(self, queue_name: str, utilization: float):
+    async def update_worker_utilization(self, queue_name: str, utilization: float):
         """更新Worker利用率数据
 
         Args:
             queue_name: 队列名称
             utilization: 利用率（0.0-1.0）
         """
-        with self._lock:
+        async with self._lock:
             if queue_name not in self._performance_metrics['worker_utilization']:
                 self._performance_metrics['worker_utilization'][queue_name] = []
 
@@ -681,7 +681,7 @@ class AsyncNeuralSomaRouter:
                     for worker_id, worker in list(self._workers.items()):
                         util = worker.get_utilization()
                         queue_name = worker.input_queue.queue_id
-                        self.update_worker_utilization(queue_name, util)
+                        await self.update_worker_utilization(queue_name, util)
 
                     await asyncio.sleep(interval)
                 except Exception as e:
