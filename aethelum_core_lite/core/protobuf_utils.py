@@ -9,45 +9,24 @@ import base64
 import time
 from typing import Any, Dict, List, Optional, Union
 
-# ProtoBuf消息类（需要先编译schema）
-# 注意：必须先编译protobuf_schema.proto
-# 编译命令：protoc --python_out=. protobuf_schema.proto
+# ProtoBuf 相关模块（protobuf 是核心依赖，会自动安装）
+from google.protobuf import any_pb2
+from google.protobuf.json_format import MessageToDict, Parse
+import google.protobuf.json_format as json_format
+from google.protobuf.message import Message
+from google.protobuf.struct_pb2 import Struct, Value
+from google.protobuf.json_format import ParseError
 
-PROTOBUF_AVAILABLE = False
+from .protobuf_schema_pb2 import (
+    NeuralImpulseProto,
+    RequestContent,
+    TextContent,
+    BinaryContent,
+    StructuredContent,
+    ErrorInfo
+)
 
-try:
-    # 尝试导入 protobuf 相关模块
-    from google.protobuf import any_pb2
-    from google.protobuf.json_format import MessageToDict, Parse
-    import google.protobuf.json_format as json_format
-    from google.protobuf.message import Message
-    from google.protobuf.struct_pb2 import Struct, Value
-
-    # 兼容protobuf新旧版本的ParseError导入
-    try:
-        from google.protobuf.json_format import ParseError
-    except ImportError:
-        # 如果找不到ParseError，创建一个简单的替代类
-        class ParseError(Exception):
-            pass
-
-    from .protobuf_schema_pb2 import (
-        NeuralImpulseProto,
-        RequestContent,
-        TextContent,
-        BinaryContent,
-        StructuredContent,
-        ErrorInfo
-    )
-
-    PROTOBUF_AVAILABLE = True
-except ImportError:
-    # ProtoBuf 不可用，提供占位符
-    PROTOBUF_AVAILABLE = False
-
-    # 定义占位符类（用于类型检查）
-    class Message: pass
-    class ParseError(Exception): pass
+PROTOBUF_AVAILABLE = True
 
 
 class ProtoBufManager:
