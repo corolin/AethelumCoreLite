@@ -79,11 +79,18 @@ Documentation = "https://aethelum-core-lite.readthedocs.io/"
 Repository = "https://github.com/aethelum/aethelum-core-lite.git"
 "Bug Reports" = "https://github.com/aethelum/aethelum-core-lite/issues"
 
+[tool.uv]
+index-url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+
 [tool.setuptools]
-packages = ["aethelum_core_lite"]
+package-dir = {"" = "."}
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["aethelum_core_lite*"]
 
 [tool.setuptools.package-data]
-aethelum_core_lite = ["*.proto", "*.md"]
+aethelum_core_lite = ["*.proto", "*.md", "*.toml"]
 
 [tool.black]
 line-length = 88

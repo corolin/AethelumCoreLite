@@ -6,8 +6,9 @@
 
 import asyncio
 import logging
-from typing import Optional, Any, List, Tuple
+from typing import Optional, Any, List, Tuple, Dict
 from dataclasses import dataclass, field, replace
+from enum import Enum
 import time
 import uuid
 import copy
@@ -16,6 +17,14 @@ from .message import MessagePriority
 from ..utils.wal_writer import AsyncWALWriter
 
 logger = logging.getLogger(__name__)
+
+
+class QueuePriority(Enum):
+    """队列优先级枚举"""
+    CRITICAL = 1  # 关键队列，如错误处理
+    HIGH = 2      # 高优先级队列
+    NORMAL = 3    # 普通优先级队列
+    LOW = 4       # 低优先级队列
 
 
 @dataclass(order=True)
@@ -546,3 +555,11 @@ class AsyncSynapticQueue:
                 return True
             else:
                 return False
+
+
+__all__ = [
+    "QueuePriority",
+    "AsyncSynapticQueue",
+    "PriorityItem",
+    "QueueMetrics",
+]

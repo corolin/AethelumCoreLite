@@ -111,10 +111,19 @@ def build_package():
     """构建包"""
     print("🔨 开始构建包...")
 
-    # 清理旧的构建文件
-    dist_dir = Path("dist")
-    if dist_dir.exists():
-        subprocess.run(["rm", "-rf", "dist"], check=True)
+    # 清理旧的构建文件（跨平台兼容）
+    import shutil
+    for dir_name in ["dist", "build"]:
+        dir_path = Path(dir_name)
+        if dir_path.exists():
+            shutil.rmtree(dir_path)
+            print(f"  🗑️  清理 {dir_name}/")
+
+    # 清理 *.egg-info 目录
+    for egg_info in Path(".").glob("*.egg-info"):
+        if egg_info.is_dir():
+            shutil.rmtree(egg_info)
+            print(f"  🗑️  清理 {egg_info}/")
 
     # 构建
     subprocess.run([sys.executable, "-m", "build"], check=True)
@@ -125,7 +134,7 @@ def check_package():
     """检查包"""
     print("🔍 检查包...")
     subprocess.run([
-        "twine", "check", "dist/*"
+        sys.executable, "-m", "twine", "check", "dist/*"
     ], check=True)
     print("✅ 包检查通过")
 
@@ -135,7 +144,7 @@ def publish_package(url, username, password):
     print(f"📦 发布到 Gitea: {url}")
 
     subprocess.run([
-        "twine", "upload",
+        sys.executable, "-m", "twine", "upload",
         "--repository-url", url,
         "--username", username,
         "--password", password,
