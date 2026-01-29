@@ -18,6 +18,27 @@
 pip install aethelum-core-lite
 ```
 
+### 从 Gitea 私有 PyPI 安装
+
+如果从内部 Gitea PyPI 仓库安装，由于该仓库不包含公共依赖包（如 watchdog、pyyaml），需要使用 `--extra-index-url` 参数指定公共 PyPI 源：
+
+```bash
+# 使用 pip
+pip install --index-url https://your-gitea.com/api/packages/user/pypi/simple/ \
+            --extra-index-url https://pypi.org/simple \
+            aethelum-core-lite[all]
+
+# 使用 uv pip
+uv pip install --index-url https://your-gitea.com/api/packages/user/pypi/simple/ \
+               --extra-index-url https://pypi.org/simple \
+               aethelum-core-lite[all]
+```
+
+**重要说明**：
+- `--index-url`: 指向您的私有 Gitea PyPI 仓库
+- `--extra-index-url`: 指向公共 PyPI，用于获取公共依赖包
+- `[all]`: 安装所有可选依赖（监控、API、性能优化等）
+
 ### 开发环境安装
 ```bash
 # 克隆仓库
