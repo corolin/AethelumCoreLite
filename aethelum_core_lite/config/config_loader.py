@@ -6,7 +6,10 @@
 
 from dataclasses import dataclass
 from typing import Optional, Dict, Any, List
-import toml
+try:
+    import tomllib  # Python 3.11+
+except ImportError:
+    import tomli as tomllib  # Python 3.10 fallback
 from pathlib import Path
 import warnings
 
@@ -195,8 +198,8 @@ class ConfigLoader:
         if not path.exists():
             return cls._get_default_config()
 
-        with open(path, 'r', encoding='utf-8') as f:
-            config = toml.load(f)
+        with open(path, 'rb') as f:
+            config = tomllib.load(f)
 
         # 添加配置验证
         config = cls._validate_config(config)
