@@ -182,6 +182,7 @@ AethelumCoreLite_v*.md
 # Log files
 *.log
 logs/
+logs_analytics.db
 
 # Temporary files
 *.tmp

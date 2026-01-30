@@ -596,18 +596,24 @@ class AsyncNeuralSomaRouter:
         else:
             return self._hooks[queue_name].get(hook_type, [])
 
-    def get_metrics(self) -> Dict[str, Any]:
+    async def get_metrics(self) -> Dict[str, Any]:
         """获取所有组件指标（从内存）"""
+        # 获取所有队列的指标（异步）
+        queue_metrics = {}
+        for queue_id, queue in self._queues.items():
+            metrics = await queue.get_metrics()
+            queue_metrics[queue_id] = metrics.metrics
+
+        # 获取所有工作器的统计（异步）
+        worker_metrics = {}
+        for worker_id, worker in self._workers.items():
+            stats = await worker.get_stats()
+            worker_metrics[worker_id] = stats.metrics
+
         return {
             "router": self._metrics.metrics,
-            "queues": {
-                queue_id: queue.get_metrics().metrics
-                for queue_id, queue in self._queues.items()
-            },
-            "workers": {
-                worker_id: worker.get_stats().metrics
-                for worker_id, worker in self._workers.items()
-            },
+            "queues": queue_metrics,
+            "workers": worker_metrics,
             "performance": self._performance_metrics
         }
 
