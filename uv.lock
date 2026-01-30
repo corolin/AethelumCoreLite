@@ -12,7 +12,7 @@ resolution-markers = [
 
 [[package]]
 name = "aethelum-core-lite"
-version = "1.0.1"
+version = "0.0.2.dev20260130"
 source = { editable = "." }
 dependencies = [
     { name = "protobuf", version = "5.29.5", source = { registry = "https://pypi.tuna.tsinghua.edu.cn/simple" }, marker = "python_full_version < '3.9'" },
