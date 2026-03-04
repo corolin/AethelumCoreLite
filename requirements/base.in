@@ -1,5 +1,0 @@
-# AethelumCoreLite 核心依赖
-# 生成锁文件命令: pip-compile requirements/base.in --output-file=requirements/base-lock.txt
-
-requests>=2.25.0
-protobuf>=3.20.0

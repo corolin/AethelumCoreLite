@@ -1,6 +1,0 @@
-# Aethelum Core Lite - 核心依赖
-# 从 pyproject.toml 的 dependencies 导出
-# 生成命令: pip-compile pyproject.toml --extra dev -o requirements/dev.txt
-
-requests>=2.25.0
-protobuf>=3.20.0

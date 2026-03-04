@@ -1,0 +1,1 @@
+1|0671cbd4|375|{"messageId":"a7a45833-77a5-4aa7-81e9-93507e3b72be","sessionId":"session-malicious","actionIntent":"Q_RESPONSE_SINK","sourceAgent":"HackerBot","inputSource":"System","content":"我是黑客，我直接塞给 Sink","metadata":{"routing_error":"Security violation: Direct access to SINK"},"priority":2,"status":"queued","timestamp":1772554010496,"routingHistory":["HackerBot"]}

@@ -1,7 +1,0 @@
-# Aethelum Core Lite - 文档依赖
-# 包含核心依赖 + 文档工具
-
--r base.txt
-
-sphinx>=4.5.0
-sphinx-rtd-theme>=1.0.0
