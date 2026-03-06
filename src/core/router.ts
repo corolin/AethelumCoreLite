@@ -4,6 +4,13 @@ import { NeuralImpulse, MessageStatus } from './message.js';
 import { AsyncWorkerMonitor } from './monitor.js';
 import { AsyncErrorHandler } from './error_handler.js';
 
+/**
+ * 🔥 全局日志函数（由应用层注入）
+ */
+declare global {
+  var logRaw: ((message: string) => void) | undefined;
+}
+
 export class CoreLiteRouter {
     private queues: Map<string, AsyncSynapticQueue> = new Map();
     private workers: Map<string, AsyncAxonWorker> = new Map();
@@ -113,11 +120,24 @@ export class CoreLiteRouter {
 
         impulse.status = MessageStatus.QUEUED;
 
+        // 📊 消息流动日志：路由追踪
+        const sourceAgent = impulse.sourceAgent || 'Unknown';
+        const prevQueue = impulse.metadata['current_queue'] || 'External';
+        const routeMsg = `🔀 [ROUTE] ${impulse.sessionId} | ${sourceAgent} → ${targetQueueId} | from: ${prevQueue}`;
+        console.log(routeMsg);
+        globalThis.logRaw?.(routeMsg);
+
+        // 更新当前队列位置
+        impulse.metadata['current_queue'] = targetQueueId;
+        impulse.metadata['routing_timestamp'] = Date.now();
+
         // SINK 终点保护机制（双重拦截之一，另一个在 Worker 内部）
         if (targetQueueId === 'Q_RESPONSE_SINK') {
             const source = impulse.sourceAgent;
             if (source !== 'Q_AUDIT_OUTPUT' && source !== 'AuditOutputWorker') {
-                console.warn(`[ROUTER SECURITY] 尝试直达 SINK 被拦截: source=${source}`);
+                const securityMsg = `[ROUTER SECURITY] 尝试直达 SINK 被拦截: source=${source}`;
+                console.warn(securityMsg);
+                globalThis.logRaw?.(securityMsg);
                 targetQueueId = 'Q_ERROR';
                 impulse.metadata['routing_error'] = 'Security violation: Direct access to SINK';
             }
@@ -135,6 +155,9 @@ export class CoreLiteRouter {
         let queue = this.queues.get(targetQueueId);
         if (!queue) {
             // 动态创建队列（支持插件形式的临时 Agent 通信）
+            const createMsg = `📦 [QUEUE] 动态创建新队列: ${targetQueueId}`;
+            console.log(createMsg);
+            globalThis.logRaw?.(createMsg);
             queue = new AsyncSynapticQueue(targetQueueId, 1000);
             this.queues.set(targetQueueId, queue);
         }

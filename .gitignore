@@ -4,3 +4,40 @@ dist/
 .bun
 bun.lockb
 .DS_Store
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+bun-debug.log*
+
+# WAL data (runtime persistence, not source)
+wal_data_v2/
+
+# Debug artifacts
+debug_messages.json
+errors.txt
+errors2.txt
+out.log
+out2.log
+router_out.log
+worker_out.log
+test_out.log
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+Thumbs.db
+
+# Testing
+coverage/
+.nyc_output/
+
+# Misc
+.cache/
+temp/
+tmp/
