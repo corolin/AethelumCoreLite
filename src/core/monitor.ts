@@ -7,6 +7,7 @@ export interface WorkerMetrics {
     errorCount: number;
     lastActiveTime: number;
     healthScore: number; // 0-100
+    isTimedOut: boolean; // 是否超时未响应
 }
 
 export interface MonitorConfig {
@@ -52,7 +53,8 @@ export class AsyncWorkerMonitor {
             processedCount: 0, // 目前无法直接穿透进 Worker 读取私有，需要 Worker 暴露或注入，先给壳
             errorCount: 0,
             lastActiveTime: Date.now(),
-            healthScore: 100
+            healthScore: 100,
+            isTimedOut: false
         });
         this.consecutiveErrors.set(id, 0);
     }
@@ -108,8 +110,14 @@ export class AsyncWorkerMonitor {
 
             // 2. 超时判定 (假死)
             if (currentState === WorkerState.RUNNING && (now - lastActive > this.config.timeoutMs)) {
-                console.warn(`[Monitor🚨] 警告: Worker ${id} 超过 ${this.config.timeoutMs}ms 未响应!`);
-                score = Math.max(0, score - 50);
+                if (!metric.isTimedOut) {
+                    console.warn(`[Monitor🚨] 警告: Worker ${id} 超过 ${this.config.timeoutMs}ms 未响应!`);
+                    metric.isTimedOut = true;
+                    score = Math.max(0, score - 50);
+                }
+            } else {
+                // 恢复正常，清除超时标志
+                metric.isTimedOut = false;
             }
 
             metric.healthScore = score;
@@ -164,5 +172,27 @@ export class AsyncWorkerMonitor {
             res[id] = { ...metric };
         }
         return res;
+    }
+
+    /**
+     * 获取当前超时的 Worker 列表
+     * @returns 超时的 Worker ID 数组
+     */
+    public getTimedOutWorkers(): string[] {
+        const timedOutWorkers: string[] = [];
+        for (const [id, metric] of this.metrics.entries()) {
+            if (metric.isTimedOut) {
+                timedOutWorkers.push(id);
+            }
+        }
+        return timedOutWorkers;
+    }
+
+    /**
+     * 检查是否有任何 Worker 超时
+     * @returns 是否有超时的 Worker
+     */
+    public hasTimedOutWorkers(): boolean {
+        return this.getTimedOutWorkers().length > 0;
     }
 }
