@@ -34,7 +34,8 @@ export class CoreLiteRouter {
             'Q_AUDIT_OUTPUT',
             'Q_RESPONSE_SINK',
             'Q_ERROR',
-            'Q_DONE'
+            'Q_DONE',
+            'Q_REFLECTION' // 后台自我反思队列
         ];
 
         for (const queueId of builtinQueues) {
