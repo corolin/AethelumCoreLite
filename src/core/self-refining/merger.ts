@@ -73,7 +73,10 @@ ${newPrefsText}
 
     private async save(content: string): Promise<void> {
         const dir = this.refiningPath.split('/').slice(0, -1).join('/');
-        await Bun.mkdir(dir, { recursive: true });
+        if (!await Bun.file(dir).exists()) {
+            const { mkdir } = await import('fs/promises');
+            await mkdir(dir, { recursive: true });
+        }
         await Bun.write(this.refiningPath, content);
         console.log(`[PreferenceMerger] Updated refining.md`);
     }
