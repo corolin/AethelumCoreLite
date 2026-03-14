@@ -107,6 +107,23 @@ export class NeuralImpulse {
   }
 
   /**
+   * 从纯对象结构还原（用于 WAL 崩溃恢复）
+   */
+  public static fromDict(dict: Record<string, any>): NeuralImpulse {
+    return new NeuralImpulse({
+      messageId: dict.messageId,
+      sessionId: dict.sessionId,
+      actionIntent: dict.actionIntent,
+      sourceAgent: dict.sourceAgent,
+      inputSource: dict.inputSource,
+      content: dict.content,
+      metadata: dict.metadata,
+      priority: dict.priority,
+      expiresAt: dict.expiresAt,
+    });
+  }
+
+  /**
    * 导出为纯对象结构
    */
   public toDict(): Record<string, any> {

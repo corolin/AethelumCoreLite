@@ -19,13 +19,13 @@ export class CoreLiteRouter {
 
     /**
      * 注册系统内置强制队列
+     * Q_RESPONSE_SINK 为终端队列，不需要 WAL
      */
     private setupBuiltinQueues(): void {
         const builtinQueues = [
             'Q_AUDIT_INPUT',
             'Q_AUDITED_INPUT', // 修复 Python 版本遗漏的问题
             'Q_AUDIT_OUTPUT',
-            'Q_RESPONSE_SINK',
             'Q_ERROR',
             'Q_DONE',
             'Q_REFLECTION' // 后台自我反思队列
@@ -34,6 +34,9 @@ export class CoreLiteRouter {
         for (const queueId of builtinQueues) {
             this.queues.set(queueId, new AsyncSynapticQueue(queueId, 1000));
         }
+
+        // 终端队列不需要 WAL（最终归宿，无进一步移交）
+        this.queues.set('Q_RESPONSE_SINK', new AsyncSynapticQueue('Q_RESPONSE_SINK', 1000, false));
     }
 
     /**
@@ -80,6 +83,7 @@ export class CoreLiteRouter {
 
     /**
      * 停止系统
+     * 停止顺序：monitor → workers → queues（先停生产消费者，最后停存储层）
      */
     public async stop(): Promise<void> {
         this.isActive = false;
@@ -92,6 +96,12 @@ export class CoreLiteRouter {
         await Promise.all(stopPromises);
 
         console.log('[Router] 所有工作器已停止。');
+
+        // 停止所有队列以 flush WAL 日志
+        console.log(`[Router] 正在停止 ${this.queues.size} 个队列...`);
+        const queueStopPromises = Array.from(this.queues.values()).map(q => q.stop());
+        await Promise.all(queueStopPromises);
+        console.log('[Router] 所有队列已停止，WAL 已 flush。');
     }
 
     /**
@@ -105,6 +115,7 @@ export class CoreLiteRouter {
 
     /**
      * 核心路由逻辑
+     * 成功移交后对来源队列写 Log2（确认消息已安全离开来源队列）
      */
     public async routeMessage(impulse: NeuralImpulse, targetQueueId: string): Promise<boolean> {
         if (!this.isActive) {
@@ -155,7 +166,21 @@ export class CoreLiteRouter {
             this.queues.set(targetQueueId, queue);
         }
 
-        return await queue.asyncPut(impulse);
+        const result = await queue.asyncPut(impulse);
+
+        // 移交成功：对来源队列写 Log2（确认消息已安全离开来源队列）
+        if (result) {
+            const srcQueueId = impulse.metadata['_src_queue_id'];
+            if (srcQueueId) {
+                const srcQueue = this.queues.get(srcQueueId);
+                if (srcQueue) {
+                    srcQueue.confirmDelivery(impulse);
+                }
+                delete impulse.metadata['_src_queue_id']; // 清理临时标记
+            }
+        }
+
+        return result;
     }
 
     public getQueueMetrics() {

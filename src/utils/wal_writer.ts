@@ -4,7 +4,7 @@ import crypto from 'crypto';
 
 class AsyncMutex {
     private promise = Promise.resolve();
-    
+
     async runExclusive<T>(fn: () => Promise<T>): Promise<T> {
         let resolve: () => void;
         const nextPromise = new Promise<void>(res => { resolve = res; });
@@ -75,6 +75,15 @@ export class WALPtrTracker {
     }
 }
 
+/**
+ * WAL 崩溃恢复条目
+ */
+export interface WALRecoveredEntry {
+    lsn: number;
+    priority: number;
+    payload: string; // JSON string
+}
+
 export class ImprovedWALWriter {
     private queueId: string;
     private walDir: string;
@@ -89,7 +98,7 @@ export class ImprovedWALWriter {
 
     // 并发写入保护锁
     private writeMutex = new AsyncMutex();
-    
+
     // Log2 批量防抖位点确认
     private lastCommittedLsn: number = 0;
     private commitTimer: NodeJS.Timeout | null = null;
@@ -101,8 +110,11 @@ export class ImprovedWALWriter {
         this.maxSegmentSize = maxSegmentSize;
     }
 
-    public async start(): Promise<void> {
-        if (!this.enableWal) return;
+    /**
+     * 启动 WAL 系统，返回未提交的条目用于崩溃恢复
+     */
+    public async start(): Promise<WALRecoveredEntry[]> {
+        if (!this.enableWal) return [];
 
         await fs.promises.mkdir(this.walDir, { recursive: true });
 
@@ -123,8 +135,13 @@ export class ImprovedWALWriter {
         this.currentSegmentPath = path.join(this.walDir, `log1_${this.currentSegmentNum.toString().padStart(6, '0')}.wal`);
         this.lsnAllocator = new LSNAllocator(maxLsn + 1);
 
+        // 扫描未提交条目用于恢复
+        const recovered = await this.scanUncommitted();
+
         // 启动完成日志
-        console.log(`[WAL Writer ${this.queueId}] 启动成功，当前 LSN: ${this.lsnAllocator!.getCurrentLsn()}，段号: ${this.currentSegmentNum}`);
+        console.log(`[WAL Writer ${this.queueId}] 启动成功，当前 LSN: ${this.lsnAllocator!.getCurrentLsn()}，段号: ${this.currentSegmentNum}${recovered.length > 0 ? `，待恢复: ${recovered.length} 条` : ''}`);
+
+        return recovered;
     }
 
     public async writeLog1(messageId: string, priority: number, data: Record<string, any>): Promise<number | null> {
@@ -135,7 +152,8 @@ export class ImprovedWALWriter {
         }
 
         return await this.writeMutex.runExclusive(async () => {
-            const lsn = this.lsnAllocator.nextLsn();
+            const allocator = this.lsnAllocator!;
+            const lsn = allocator.nextLsn();
             const payload = JSON.stringify(data);
 
             // 生成 checksum (简单 hash)
@@ -157,6 +175,9 @@ export class ImprovedWALWriter {
         });
     }
 
+    /**
+     * 确认移交成功：更新 LSN 位点（防抖 500ms 批量提交）
+     */
     public writeLog2(messageId: string, lsn?: number): void {
         if (!this.enableWal || lsn === undefined || lsn === null) return;
         // Guard against calls before start() has completed
@@ -172,7 +193,7 @@ export class ImprovedWALWriter {
                     console.error(`[WAL Writer ${this.queueId}] 提交位点失败:`, err);
                 });
                 this.commitTimer = null;
-            }, 500); // 性能与可靠性的绝佳平衡，500ms 写盘一次
+            }, 500).unref(); // 不阻止进程优雅退出
         }
     }
 
@@ -189,5 +210,74 @@ export class ImprovedWALWriter {
             }
         }
         this.ptrTracker?.stop();
+    }
+
+    // ============== 崩溃恢复扫描 ==============
+
+    /**
+     * 扫描所有 WAL 段文件中未提交的条目（lsn > committedLsn）
+     */
+    private async scanUncommitted(): Promise<WALRecoveredEntry[]> {
+        const committedLsn = this.ptrTracker.getCommittedLsn();
+        const entries: WALRecoveredEntry[] = [];
+
+        for (let seg = 0; seg <= this.currentSegmentNum; seg++) {
+            const segPath = path.join(this.walDir, `log1_${seg.toString().padStart(6, '0')}.wal`);
+            try {
+                const content = await fs.promises.readFile(segPath, 'utf8');
+                for (const line of content.split('\n')) {
+                    if (!line) continue;
+                    const entry = this.parseRecord(line);
+                    if (entry && entry.lsn > committedLsn) {
+                        entries.push(entry);
+                    }
+                }
+            } catch {
+                // 段文件不存在则跳过
+            }
+        }
+
+        return entries;
+    }
+
+    /**
+     * 解析单条 WAL 记录
+     * 格式: LSN|CHECKSUM|PAYLOAD_LENGTH|PAYLOAD
+     * 注意: JSON payload 可能包含 '|'，因此基于前 3 个分隔符定位
+     */
+    private parseRecord(line: string): WALRecoveredEntry | null {
+        const firstSep = line.indexOf('|');
+        if (firstSep === -1) return null;
+        const secondSep = line.indexOf('|', firstSep + 1);
+        if (secondSep === -1) return null;
+        const thirdSep = line.indexOf('|', secondSep + 1);
+        if (thirdSep === -1) return null;
+
+        const lsn = parseInt(line.substring(0, firstSep), 10);
+        if (isNaN(lsn)) return null;
+
+        const checksum = line.substring(firstSep + 1, secondSep);
+        const payloadLen = parseInt(line.substring(secondSep + 1, thirdSep), 10);
+        const payload = line.substring(thirdSep + 1);
+
+        if (Buffer.byteLength(payload, 'utf8') !== payloadLen) {
+            console.warn(`[WAL ${this.queueId}] 载荷长度不匹配: LSN ${lsn}, expected ${payloadLen}, got ${Buffer.byteLength(payload, 'utf8')}`);
+            return null;
+        }
+
+        const actualChecksum = crypto.createHash('md5').update(payload).digest('hex').substring(0, 8);
+        if (actualChecksum !== checksum) {
+            console.warn(`[WAL ${this.queueId}] 校验和不匹配: LSN ${lsn}`);
+            return null;
+        }
+
+        // 从 payload JSON 中提取 priority
+        let priority = 0;
+        try {
+            const dict = JSON.parse(payload);
+            priority = dict.priority ?? 0;
+        } catch { /* 使用默认值 */ }
+
+        return { lsn, priority, payload };
     }
 }

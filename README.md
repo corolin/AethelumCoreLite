@@ -1,8 +1,8 @@
-# Aethelum Core Lite - 灵壤精核 (Bun/Node.js)
+# Aethelum Core Lite - 灵壤精核
 
-> 模拟树神经的通信框架 - TypeScript 复刻版
+> 模拟树神经的异步通信框架
 
-AethelumCoreLite 是 Python 版本的 TypeScript/Bun 复刻，保持了相同的架构设计理念，将"树神经"概念引入现代 JavaScript 异步编程。
+AethelumCoreLite 将"树神经"概念引入现代 JavaScript 异步编程，构建了一套基于事件循环的高性能消息处理架构。
 
 ## 特性
 
@@ -11,6 +11,11 @@ AethelumCoreLite 是 Python 版本的 TypeScript/Bun 复刻，保持了相同的
 - 💾 **异步优先**: 完全基于 Promise/async-await 的异步架构
 - 🔒 **类型安全**: 端到端 TypeScript 支持，完整类型推导
 - 🛡️ **健康监控**: 内置 Worker 健康评分与自动熔断恢复
+- 🔗 **钩子系统**: 支持前置/后置/错误/转换/过滤等多种钩子
+- 📝 **WAL 持久化**: Write-Ahead Logging 日志写入，支持数据恢复
+- ✅ **统一验证**: 多级验证框架，支持分级结果（INFO/WARNING/ERROR/CRITICAL）
+- 🔄 **自我优化**: 内置自我精炼分析器与合并器
+- 📊 **指标 API**: 内置监控指标接口
 - 🚀 **跨平台**: 支持 Bun 和 Node.js 运行时
 
 ## 安装
@@ -39,6 +44,40 @@ bun install
 bun run typecheck
 ```
 
+## 项目结构
+
+```
+src/
+├── core/                   # 核心模块
+│   ├── router.ts           # 路由器（神经胞体）
+│   ├── message.ts          # 神经脉冲消息定义
+│   ├── queue.ts            # 异步突触队列
+│   ├── worker.ts           # 轴突工作器
+│   ├── monitor.ts          # 工作器监控器
+│   ├── error_handler.ts    # 错误处理器
+│   └── self-refining/      # 自我优化模块
+│       ├── analyzer.ts     # 精炼分析器
+│       ├── merger.ts       # 精炼合并器
+│       └── worker.ts       # 自我优化工作器
+├── hooks/                  # 钩子系统
+│   ├── chain.ts            # 钩子链管理
+│   └── types.ts            # 钩子类型定义
+├── utils/                  # 工具模块
+│   ├── unified_validator.ts    # 统一验证框架
+│   ├── wal_writer.ts       # WAL 写入器
+│   ├── logger.ts           # 日志器
+│   ├── structured_logger.ts    # 结构化日志
+│   ├── payload_store.ts    # 负载存储
+│   └── log_analytics.ts    # 日志分析
+├── api/                    # API 模块
+│   └── metrics_api.ts      # 指标 API
+├── config/                 # 配置模块
+│   └── config_loader.ts    # 配置加载器
+├── prompts/                # 提示词模块
+│   └── moral_audit_prompts.ts  # 道德审计提示词
+└── types/                  # 全局类型定义
+```
+
 ## 核心概念
 
 ### 神经脉冲 (NeuralImpulse)
@@ -47,20 +86,23 @@ bun run typecheck
 - `sessionId`: 会话ID
 - `actionIntent`: 路由目标
 - `sourceAgent`: 消息来源
+- `inputSource`: 输入来源类型
 - `content`: 消息内容
 - `metadata`: 元数据（可扩展）
+- `priority`: 消息优先级
+- `expiresAt`: 过期时间
 
 ### 神经元组件
 
-#### NeuralSomaRouter (神经胞体路由器)
+#### CoreLiteRouter (神经胞体路由器)
 
 主控制器，管理队列和工作器：
 
 ```typescript
-import { NeuralSomaRouter, NeuralImpulse } from 'aethelumcorelite-nodejs/core';
+import { CoreLiteRouter, NeuralImpulse } from 'aethelum-core-lite/core';
 
 // 创建路由器
-const router = new NeuralSomaRouter();
+const router = new CoreLiteRouter();
 
 // 注册队列
 router.registerQueue("Q_PROCESS", new AsyncSynapticQueue("Q_PROCESS"));
@@ -79,12 +121,14 @@ const impulse = new NeuralImpulse({
 await router.routeMessage(impulse, "Q_PROCESS");
 ```
 
+路由器内置系统队列：`Q_AUDIT_INPUT`、`Q_AUDIT_OUTPUT`、`Q_RESPONSE_SINK`、`Q_ERROR`、`Q_DONE`、`Q_REFLECTION`，并提供动态队列创建与安全路由机制。
+
 #### AsyncSynapticQueue (突触队列)
 
-高性能异步队列，支持超时获取：
+高性能异步队列，支持优先级和超时获取：
 
 ```typescript
-import { AsyncSynapticQueue } from 'aethelumcorelite-nodejs/core';
+import { AsyncSynapticQueue } from 'aethelum-core-lite/core';
 
 // 创建队列
 const queue = new AsyncSynapticQueue("my_queue");
@@ -95,16 +139,18 @@ await queue.asyncPut(impulse);
 // 消费消息（支持超时）
 const message = await queue.asyncGet(1000); // 1秒超时
 
-// 带优先级的消息
+// 带优先级的消息（5级：CRITICAL / HIGH / NORMAL / LOW / BACKGROUND）
 await queue.asyncPut(impulse, 5); // priority = 5
 ```
 
+队列支持 WAL 日志持久化，确保消息可恢复。
+
 #### AsyncAxonWorker (轴突工作器)
 
-异步消息处理单元：
+异步消息处理单元，内置钩子集成：
 
 ```typescript
-import { AsyncAxonWorker, WorkerState } from 'aethelumcorelite-nodejs/core';
+import { AsyncAxonWorker } from 'aethelum-core-lite/core';
 
 class MyWorker extends AsyncAxonWorker {
     protected async process(impulse: NeuralImpulse): Promise<void> {
@@ -126,7 +172,7 @@ await worker.start();
 健康监控与自动熔断：
 
 ```typescript
-import { AsyncWorkerMonitor } from 'aethelumcorelite-nodejs/core';
+import { AsyncWorkerMonitor } from 'aethelum-core-lite/core';
 
 const monitor = new AsyncWorkerMonitor({
     checkIntervalMs: 5000,      // 健康检查间隔
@@ -136,10 +182,7 @@ const monitor = new AsyncWorkerMonitor({
     recoveryDelayMs: 10000      // 恢复延迟
 });
 
-// 注册 Worker
 monitor.registerWorker(worker);
-
-// 启动监控
 monitor.start();
 
 // 获取健康状态
@@ -147,28 +190,35 @@ const metrics = monitor.getGlobalMetrics();
 console.log(metrics);
 ```
 
-### Worker 状态管理
+## 钩子系统
+
+框架内置灵活的钩子机制，支持在消息处理的不同阶段插入自定义逻辑：
 
 ```typescript
-enum WorkerState {
-    IDLE = "IDLE",           // 空闲
-    RUNNING = "RUNNING",     // 运行中
-    PAUSED = "PAUSED",       // 暂停
-    ERROR = "ERROR",         // 错误/熔断
-    STOPPED = "STOPPED"      // 已停止
+// 支持的钩子类型
+enum HookType {
+    PRE_PROCESS = "PRE_PROCESS",       // 前置处理
+    POST_PROCESS = "POST_PROCESS",     // 后置处理
+    ERROR_HANDLER = "ERROR_HANDLER",   // 错误处理
+    TRANSFORM = "TRANSFORM",           // 消息转换
+    FILTER = "FILTER"                  // 消息过滤
 }
 ```
 
+钩子链支持：
+- 优先级排序执行
+- 超时控制
+- 信号机制（中断/继续）
+- 动态启用/禁用
+
 ## 快速开始
 
-### 基础使用示例
-
 ```typescript
-import { NeuralSomaRouter, AsyncSynapticQueue, AsyncAxonWorker, AsyncWorkerMonitor } from 'aethelumcorelite-nodejs/core';
-import { NeuralImpulse } from 'aethelumcorelite-nodejs/core';
+import { CoreLiteRouter, AsyncSynapticQueue, AsyncAxonWorker, AsyncWorkerMonitor } from 'aethelum-core-lite/core';
+import { NeuralImpulse } from 'aethelum-core-lite/core';
 
 // 1. 创建路由器
-const router = new NeuralSomaRouter();
+const router = new CoreLiteRouter();
 const inputQueue = new AsyncSynapticQueue("Q_PROCESS");
 const outputQueue = new AsyncSynapticQueue("Q_RESPONSE");
 
@@ -178,11 +228,8 @@ router.registerQueue("Q_RESPONSE", outputQueue);
 // 2. 定义 Worker
 class EchoWorker extends AsyncAxonWorker {
     protected async process(impulse: NeuralImpulse): Promise<void> {
-        // 处理业务逻辑
         const response = `Echo: ${impulse.content}`;
         impulse.content = response;
-
-        // 路由到响应队列
         await this.routeAndDone(impulse, "Q_RESPONSE");
     }
 }
@@ -212,6 +259,58 @@ const response = await outputQueue.asyncGet(1000);
 console.log(response.content); // "Echo: Hello, Aethelum!"
 ```
 
+## 工具模块
+
+### 统一验证器 (UnifiedValidator)
+
+多级验证框架，支持扩展多种验证器，验证结果分级：
+
+```typescript
+// 验证结果级别：INFO → WARNING → ERROR → CRITICAL
+```
+
+### WAL 写入器 (ImprovedWALWriter)
+
+Write-Ahead Logging 实现，为队列消息提供崩溃恢复能力。WAL 作为"临时保险箱"，确保进程崩溃后在途消息不丢失。
+
+**双日志结构（参考数据库 WAL 设计）**：
+
+```
+消息入队 → Log1（数据日志，消息入当前队列之前落盘）
+          ↓
+     Worker 处理
+          ↓
+消息移交 → Log2（确认日志，消息成功进入下一队列后，对来源队列确认）
+```
+
+**核心保证**：任意时刻只有一个队列认为某条消息是"未消费"的。崩溃只会重放"尚未完成移交"的消息。
+
+**关键语义**：
+- **Log1**：`queue.asyncPut()` 调用时写入，消息入队前先落盘
+- **Log2**：`router.routeMessage()` 成功将消息放入目标队列后，对来源队列调用 `queue.confirmDelivery()` 写入
+- **崩溃恢复**：进程重启时，`queue` 构造函数自动扫描 WAL 段文件，回放 `lsn > committedLsn` 的未提交条目到队列
+- **终端队列**（Q_RESPONSE_SINK）：不需要 WAL，是消息的最终归宿
+
+**存储结构**：
+```
+wal_data_v2/
+└── {queueId}/
+    ├── tracker.ptr          # 已提交的 LSN 位点（原子重命名写入）
+    ├── log1_000000.wal      # WAL 段文件（每段最大 100MB）
+    └── log1_000001.wal      # 自动轮转
+```
+
+**WAL 记录格式**：`LSN|CHECKSUM|PAYLOAD_LENGTH|PAYLOAD\n`
+
+**初始化与恢复时序**：
+1. `queue` 构造函数异步启动 WAL 初始化 + 恢复
+2. `asyncPut()` 中的 `await walReady` 确保恢复完成前新消息不入队
+3. Workers 启动后轮询队列，恢复的消息会被正常消费
+
+### 结构化日志
+
+内置结构化日志系统，支持日志分析和性能监控。
+
 ## 健康监控与容错
 
 ### 健康评分系统
@@ -232,7 +331,7 @@ console.log(response.content); // "Echo: Hello, Aethelum!"
 - 健康分数 ≤ 20
 
 ```typescript
-// 熔断后的行为
+// 熔断后的行为：
 // 1. Worker 状态被设置为 ERROR
 // 2. 停止处理新消息
 // 3. 如果 autoRecovery = true，延迟后自动重启
@@ -241,10 +340,9 @@ console.log(response.content); // "Echo: Hello, Aethelum!"
 ### 自动恢复
 
 ```typescript
-// 启用自动恢复（推荐）
 const monitor = new AsyncWorkerMonitor({
     autoRecovery: true,
-    recoveryDelayMs: 10000  // 给外部10秒修复时间
+    recoveryDelayMs: 10000
 });
 
 // 恢复流程：
@@ -255,198 +353,18 @@ const monitor = new AsyncWorkerMonitor({
 
 ## 并发安全性
 
-### 异步安全保证
-
 AethelumCoreLite 基于 JavaScript 事件循环，天然避免多线程竞争：
 
-#### ✅ 已保护的组件
-
-1. **AsyncSynapticQueue (突触队列)**
-   - 使用 Promise 链确保操作顺序
-   - asyncPut/asyncGet 原子性保证
-   - 无锁设计，利用事件循环单线程特性
-
-2. **AsyncWorkerMonitor (工作器监控器)**
-   - Map 数据结构保护
-   - 定时检查与 Worker 操作分离
-   - 返回数据副本防止外部修改
-
-3. **AsyncAxonWorker (轴突工作器)**
-   - 状态转换原子性
-   - 健康统计线程安全
-   - process() 方法串行执行
-
-### 使用最佳实践
-
-#### ✅ 推荐做法
-
-```typescript
-// 1. 使用 async/await 确保操作顺序
-async function safeOperation() {
-    await queue.asyncPut(impulse);
-    const result = await queue.asyncGet();
-    return result;
-}
-
-// 2. 避免 Promise.all 中的竞争
-// ❌ 可能乱序
-await Promise.all([
-    queue.asyncPut(impulse1),
-    queue.asyncPut(impulse2)
-]);
-
-// ✅ 保证顺序
-await queue.asyncPut(impulse1);
-await queue.asyncPut(impulse2);
-
-// 3. 错误处理
-try {
-    await worker.start();
-} catch (error) {
-    console.error('Worker failed to start:', error);
-    // 实现回退逻辑
-}
-```
-
-#### ❌ 常见陷阱
-
-```typescript
-// 1. 忘记 await
-queue.asyncPut(impulse); // ❌ 消息可能未发送
-await queue.asyncPut(impulse); // ✅
-
-// 2. 混用回调与 Promise
-queue.asyncPut(impulse).then(() => {
-    // 嵌套回调地狱
-    queue.asyncGet().then(result => {
-        // ...
-    });
-});
-
-// ✅ 使用 async/await
-await queue.asyncPut(impulse);
-const result = await queue.asyncGet();
-
-// 3. 阻塞事件循环
-function bad() {
-    while (true) { // ❌ 阻塞整个事件循环
-        // CPU 密集操作
-    }
-}
-
-// ✅ 使用 Worker 线程或分片处理
-async function good() {
-    for (const chunk of data) {
-        await processChunk(chunk);
-        await new Promise(r => setImmediate(r)); // 让出控制
-    }
-}
-```
+- **AsyncSynapticQueue**: Promise 链确保操作顺序，无锁设计
+- **AsyncWorkerMonitor**: Map 数据结构保护，返回数据副本防止外部修改
+- **AsyncAxonWorker**: 状态转换原子性，process() 方法串行执行
 
 ## 性能考虑
 
 - **事件循环**: 单线程避免锁竞争
 - **零拷贝**: NeuralImpulse 引用传递
-- **队列复用**: 使用对象池减少 GC
-- **背压控制**: 队列满时的背压策略
-
-## 开发
-
-### 运行测试
-
-```bash
-bun test
-```
-
-### 类型检查
-
-```bash
-bun run typecheck
-```
-
-### 代码格式化
-
-```bash
-bun run lint
-```
-
-## 故障排查
-
-### Worker 假死
-
-**症状**: Worker 状态为 RUNNING 但长时间无响应
-
-**原因**: process() 方法中有阻塞操作或死循环
-
-**解决方案**:
-```typescript
-// ❌ 阻塞操作
-protected async process(impulse: NeuralImpulse): Promise<void> {
-    while (true) {  // 死循环
-        // ...
-    }
-}
-
-// ✅ 添加退出条件
-protected async process(impulse: NeuralImpulse): Promise<void> {
-    let attempts = 0;
-    while (attempts < 3) {
-        const result = await this.tryOperation();
-        if (result.success) break;
-        attempts++;
-    }
-}
-```
-
-### 内存泄漏
-
-**症状**: 内存使用持续增长
-
-**原因**: 未清理的事件监听器或定时器
-
-**解决方案**:
-```typescript
-class MyWorker extends AsyncAxonWorker {
-    private timers: NodeJS.Timeout[] = [];
-
-    protected async process(impulse: NeuralImpulse): Promise<void> {
-        const timer = setInterval(() => {
-            // 定期任务
-        }, 1000);
-        this.timers.push(timer);
-    }
-
-    async stop(): Promise<void> {
-        // 清理定时器
-        for (const timer of this.timers) {
-            clearInterval(timer);
-        }
-        this.timers = [];
-        await super.stop();
-    }
-}
-```
-
-### 队列阻塞
-
-**症状**: asyncGet 长时间等待
-
-**原因**: 消费者处理速度慢于生产者
-
-**解决方案**:
-```typescript
-// 增加消费者数量
-const workers = [
-    new Worker("worker-1", queue, router),
-    new Worker("worker-2", queue, router),
-    new Worker("worker-3", queue, router)
-];
-
-// 或设置队列大小限制
-const queue = new AsyncSynapticQueue("bounded", {
-    maxSize: 1000  // 超过 1000 条时背压
-});
-```
+- **优先级队列**: 5 级优先级确保关键消息优先处理
+- **WAL 持久化**: 异步写入，不阻塞主流程
 
 ## 技术栈
 
@@ -454,23 +372,24 @@ const queue = new AsyncSynapticQueue("bounded", {
 |------|------|
 | **运行时** | Bun / Node.js |
 | **语言** | TypeScript 5.9+ |
+| **模块系统** | ESM (nodenext) |
 | **序列化** | JSON |
 | **验证** | Zod |
-| **Web 框架** | Hono (用于 HTTP 相关组件) |
+| **Web 框架** | Hono |
+| **UUID** | uuid v7 |
 
-## 与 Python 版本的差异
+## 开发
 
-| 特性 | Python 版 | Bun/Node.js 版 |
-|------|-----------|----------------|
-| 并发模型 | 多线程 | 事件循环 |
-| 持久化 | WAL + msgpack | 计划中 |
-| 类型系统 | 类型注解 | 完整 TypeScript |
-| 性能特点 | GIL 限制 | 单线程极高性能 |
-| 部署 | 需要 Python 环境 | 单一二进制 |
+```bash
+# 运行测试
+bun test
 
-## 相关项目
+# 类型检查
+bun run typecheck
 
-- [Aethelum-Nexus](../Aethelum-Nexus) - 基于 AethelumCoreLite 的完整网关系统
+# 代码格式化
+bun run lint
+```
 
 ## License
 
