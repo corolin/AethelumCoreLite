@@ -81,7 +81,7 @@ export class ImprovedWALWriter {
     private enableWal: boolean;
 
     private ptrTracker!: WALPtrTracker;
-    private lsnAllocator!: LSNAllocator;
+    private lsnAllocator?: LSNAllocator;
 
     private currentSegmentPath!: string;
     private currentSegmentNum: number = 0;
@@ -123,13 +123,16 @@ export class ImprovedWALWriter {
         this.currentSegmentPath = path.join(this.walDir, `log1_${this.currentSegmentNum.toString().padStart(6, '0')}.wal`);
         this.lsnAllocator = new LSNAllocator(maxLsn + 1);
 
-        console.log(`[WAL Writer ${this.queueId}] 启动成功，当前 LSN: ${this.lsnAllocator.getCurrentLsn()}，段号: ${this.currentSegmentNum}`);
+        // 启动完成日志
+        console.log(`[WAL Writer ${this.queueId}] 启动成功，当前 LSN: ${this.lsnAllocator!.getCurrentLsn()}，段号: ${this.currentSegmentNum}`);
     }
 
     public async writeLog1(messageId: string, priority: number, data: Record<string, any>): Promise<number | null> {
         if (!this.enableWal) return null;
         // Guard against calls before start() has completed
-        if (!this.lsnAllocator) return null;
+        if (!this.lsnAllocator) {
+            throw new Error(`[WAL Writer ${this.queueId}] writeLog1() called before start() has completed`);
+        }
 
         return await this.writeMutex.runExclusive(async () => {
             const lsn = this.lsnAllocator.nextLsn();
