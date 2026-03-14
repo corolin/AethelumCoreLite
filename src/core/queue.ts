@@ -189,9 +189,9 @@ export class AsyncSynapticQueue {
         }
     }
 
-    public stop(): void {
+    public async stop(): Promise<void> {
         if (this.walWriter) {
-            this.walWriter.stop();
+            await this.walWriter.stop();
         }
     }
 }

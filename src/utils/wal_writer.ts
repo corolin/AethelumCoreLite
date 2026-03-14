@@ -128,6 +128,8 @@ export class ImprovedWALWriter {
 
     public async writeLog1(messageId: string, priority: number, data: Record<string, any>): Promise<number | null> {
         if (!this.enableWal) return null;
+        // Guard against calls before start() has completed
+        if (!this.lsnAllocator) return null;
 
         return await this.writeMutex.runExclusive(async () => {
             const lsn = this.lsnAllocator.nextLsn();
@@ -154,6 +156,8 @@ export class ImprovedWALWriter {
 
     public writeLog2(messageId: string, lsn?: number): void {
         if (!this.enableWal || lsn === undefined || lsn === null) return;
+        // Guard against calls before start() has completed
+        if (!this.ptrTracker) return;
 
         // 更新最后位点
         this.lastCommittedLsn = lsn;
@@ -169,8 +173,18 @@ export class ImprovedWALWriter {
         }
     }
 
-    public stop(): void {
+    public async stop(): Promise<void> {
         if (!this.enableWal) return;
-        this.ptrTracker.stop();
+        // Flush any pending commit before stopping
+        if (this.commitTimer !== null) {
+            clearTimeout(this.commitTimer);
+            this.commitTimer = null;
+            try {
+                await this.ptrTracker?.commitLsn(this.lastCommittedLsn);
+            } catch (err) {
+                console.error(`[WAL Writer ${this.queueId}] 停止时提交位点失败:`, err);
+            }
+        }
+        this.ptrTracker?.stop();
     }
 }

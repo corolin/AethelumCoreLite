@@ -97,7 +97,8 @@ ${compressionSummary}
     private parseResponse(content: string): string[] {
         try {
             // 尝试提取 JSON（处理可能的额外文本）
-            const jsonMatch = content.match(/\{[\s\S]*?\}/);
+            // 使用贪婪匹配以捕获最外层的完整 JSON 对象（而非最短的内嵌对象）
+            const jsonMatch = content.match(/\{[\s\S]*\}/);
             if (!jsonMatch) return [];
 
             const parsed = JSON.parse(jsonMatch[0]);

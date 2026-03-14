@@ -10,9 +10,9 @@ describe("AsyncSynapticQueue - Unit Tests", () => {
         queue = new AsyncSynapticQueue("test_q", 5, false);
     });
 
-    afterEach(() => {
+    afterEach(async () => {
         queue.clear();
-        queue.stop();
+        await queue.stop();
     });
 
     test("asyncPut() and asyncGet() basic operations", async () => {

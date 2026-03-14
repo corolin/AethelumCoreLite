@@ -116,7 +116,7 @@ export class MoralAuditPrompts {
 
             const response = JSON.parse(responseJson);
             const validTypes = new Set([
-                'normal', 'SecurityViolation', 'SuicideSelfHarm', 'HarmToOthers',
+                'normal', 'RoleHijacking', 'SecurityViolation', 'SuicideSelfHarm', 'HarmToOthers',
                 'AnimalAbuse', 'SexualContent', 'IllegalActivity', 'Violence'
             ]);
 
