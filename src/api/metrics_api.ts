@@ -8,13 +8,9 @@ export class MetricsAPI {
     private _requireAuth: boolean;
 
     constructor(router: CoreLiteRouter | null = null, apiKey?: string) {
-        if (!apiKey) {
-            throw new Error("必须设置apiKey（安全要求：禁止无认证访问）");
-        }
-
         this._router = router;
-        this._apiKey = apiKey;
-        this._requireAuth = true;
+        this._apiKey = apiKey || '';
+        this._requireAuth = !!apiKey; // 有 apiKey 才需要认证
 
         this.app = new Hono();
         this.setupRoutes();
@@ -23,6 +19,9 @@ export class MetricsAPI {
     private setupRoutes() {
         // Middleware for Auth — 直接读取 this._apiKey，确保 setApiKey() 轮换后立即生效
         this.app.use('/api/v1/*', async (c, next) => {
+            if (!this._requireAuth) {
+                return await next(); // 无认证模式，直接放行
+            }
             const authHeader = c.req.header('Authorization');
             if (!authHeader || !authHeader.startsWith('Bearer ') || authHeader.slice(7) !== this._apiKey) {
                 return c.json({ error: 'Unauthorized' }, 401);

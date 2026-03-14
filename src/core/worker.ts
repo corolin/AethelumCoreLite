@@ -37,6 +37,9 @@ export class AsyncAxonWorker {
     private stopRequested: boolean = false;
     private isProcessing: boolean = false;
 
+    // runLoop 代际计数器，防止恢复时启动重复循环
+    private runLoopGeneration: number = 0;
+
     // ==== 监控与恢复专用指标 ====
     private internalErrorCount: number = 0;
     private lastActiveTimestamp: number = Date.now();
@@ -119,6 +122,14 @@ export class AsyncAxonWorker {
     }
 
     /**
+     * 供 Monitor 在恢复时重置内部错误计数，避免无限熔断循环
+     */
+    public resetInternalErrorCount(): void {
+        this.internalErrorCount = 0;
+        this.lastActiveTimestamp = Date.now();
+    }
+
+    /**
      * 🆕 辅助方法：路由消息并标记为已完成（防止二次路由）
      *
      * 使用场景：当子类手动调用 router.routeMessage() 后，需要调用此方法来标记已完成路由
@@ -150,9 +161,10 @@ export class AsyncAxonWorker {
 
         this.state = WorkerState.RUNNING;
         this.stopRequested = false;
+        this.runLoopGeneration++; // 使旧 runLoop 自行退出
 
         // 不再 await 这个调用，让它在后台循环
-        this.runLoop().catch(err => {
+        this.runLoop(this.runLoopGeneration).catch(err => {
             console.error(`[Worker ${this.id}] 发生致命错误:`, err);
             this.state = WorkerState.ERROR;
         });
@@ -178,12 +190,12 @@ export class AsyncAxonWorker {
     /**
      * Worker 主循环 - 基于 Node.js 事件循环的自然异步等待
      */
-    private async runLoop(): Promise<void> {
+    private async runLoop(expectedGeneration: number): Promise<void> {
         const startMsg = `[Worker ${this.id}] 启动并在队列 ${this.inputQueue.queueId} 上监听...`;
         console.log(startMsg);
         globalThis.logRaw?.(startMsg);
 
-        while (!this.stopRequested) {
+        while (!this.stopRequested && this.runLoopGeneration === expectedGeneration) {
             try {
                 if (this.state === WorkerState.PAUSED) {
                     await new Promise(resolve => setTimeout(resolve, 500));
@@ -222,9 +234,12 @@ export class AsyncAxonWorker {
             }
         }
 
-        const stopMsg = `[Worker ${this.id}] 已停止。`;
-        console.log(stopMsg);
-        globalThis.logRaw?.(stopMsg);
+        // 只有当前代的循环才打印停止消息
+        if (this.runLoopGeneration === expectedGeneration) {
+            const stopMsg = `[Worker ${this.id}] 已停止。`;
+            console.log(stopMsg);
+            globalThis.logRaw?.(stopMsg);
+        }
     }
 
     /**

@@ -33,6 +33,12 @@ export class AsyncWorkerMonitor {
     // 记录连续报错次数
     private consecutiveErrors: Map<string, number> = new Map();
 
+    // 防止 checkHealth 重叠执行
+    private _isChecking: boolean = false;
+
+    // 追踪恢复定时器，用于关闭时取消
+    private recoveryTimeouts: Set<NodeJS.Timeout> = new Set();
+
     constructor(config?: Partial<MonitorConfig>) {
         this.config = {
             checkIntervalMs: 5000,
@@ -68,11 +74,21 @@ export class AsyncWorkerMonitor {
         console.log(`[Monitor] 启动监控守护进程，扫描间隔: ${this.config.checkIntervalMs}ms`);
 
         this.intervalId = setInterval(() => {
-            this.checkHealth();
+            if (this._isChecking) return; // 跳过重叠执行
+            this._isChecking = true;
+            this.checkHealth().finally(() => {
+                this._isChecking = false;
+            });
         }, this.config.checkIntervalMs);
     }
 
     public stop(): void {
+        // 取消所有待执行的恢复定时器
+        for (const timeoutId of this.recoveryTimeouts) {
+            clearTimeout(timeoutId);
+        }
+        this.recoveryTimeouts.clear();
+
         if (this.intervalId) {
             clearInterval(this.intervalId);
             this.intervalId = undefined;
@@ -174,15 +190,21 @@ export class AsyncWorkerMonitor {
     private scheduleRecovery(worker: AsyncAxonWorker): void {
         console.log(`[AutoRecovery🩺] 已为 Worker ${worker.id} 排期 ${this.config.recoveryDelayMs}ms 后自动启动恢复程序。`);
 
-        // 利用 Bun/Node 原生的定时器即可完美充当 Python 里面的异步挂起恢复
-        setTimeout(() => {
+        const timeoutId = setTimeout(() => {
+            this.recoveryTimeouts.delete(timeoutId); // 已触发，从追踪中移除
+
             console.log(`[AutoRecovery🩺] 尝试重启 Worker ${worker.id} ...`);
 
-            // 重置计量
+            // 重置 Monitor 侧计量
             this.consecutiveErrors.set(worker.id, 0);
             if (this.metrics.has(worker.id)) {
-                this.metrics.get(worker.id)!.healthScore = 80; // 恢复期给 80 分
+                const metric = this.metrics.get(worker.id)!;
+                metric.healthScore = 80; // 恢复期给 80 分
+                metric.errorCount = 0; // 同步 monitor 侧的错误计数
             }
+
+            // 重置 Worker 侧的内部错误计数（防止立即重新熔断）
+            worker.resetInternalErrorCount();
 
             // 重新推入运行态
             worker.start().catch((err) => {
@@ -190,6 +212,8 @@ export class AsyncWorkerMonitor {
             });
 
         }, this.config.recoveryDelayMs);
+
+        this.recoveryTimeouts.add(timeoutId);
     }
 
     public getGlobalMetrics(): Record<string, WorkerMetrics> {
