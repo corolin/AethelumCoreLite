@@ -1,4 +1,5 @@
 import { createHash } from 'crypto';
+import type { BaseValidator, ValidationContext, ValidationResult } from './unified_validator.js';
 
 export class ValidationCacheKey {
     constructor(
@@ -79,13 +80,13 @@ export class ValidationCache {
 class ValidationPerformanceOptimizer {
     public cache = new ValidationCache();
 
-    async validateAsyncWithOptimization(validators: any[], data: any, context: any): Promise<any[]> {
-        const results = [];
+    async validateAsyncWithOptimization(validators: BaseValidator[], data: any, context: ValidationContext): Promise<ValidationResult[]> {
+        const results: ValidationResult[] = [];
 
         for (const v of validators) {
             let res = this.cache.get(v.name, data, context);
             if (!res) {
-                res = await v.asyncValidate(data, context);
+                res = await v.execute(data, context);
                 this.cache.put(v.name, data, context, res);
             }
             results.push(res);
@@ -96,5 +97,5 @@ class ValidationPerformanceOptimizer {
 }
 
 export const optimizer = new ValidationPerformanceOptimizer();
-export const validateAsyncWithOptimization = (validators: any[], data: any, context: any) =>
+export const validateAsyncWithOptimization = (validators: BaseValidator[], data: any, context: ValidationContext) =>
     optimizer.validateAsyncWithOptimization(validators, data, context);

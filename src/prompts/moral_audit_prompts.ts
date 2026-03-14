@@ -61,7 +61,7 @@ export class MoralAuditPrompts {
     *核心意图：明确表示内容超出交流范围，引导至美食或兴趣爱好等其他话题。*
 - 违法犯罪行为： (Type: "IllegalActivity")
     *核心意图：强调遵守法律和道德界限，明确拒绝讨论或提供建议，并坚决转到积极向上的话题。*
-- 其他所有类型： (Type: "Unkown")
+- 其他所有类型： (Type: "Unknown")
     *核心意图：以安全为由进行通用拒绝，引导至公开透明、有趣的内容。*`;
 
     static withAuditState<T>(callback: () => T): T {
@@ -161,7 +161,7 @@ export class MoralAuditPrompts {
         try {
             let result = "";
             for (let i = 0; i < plaintext.length; i++) {
-                const char = plaintext[i];
+                const char = plaintext[i]!;
                 if (/[a-zA-Z]/.test(char)) {
                     const isUpper = char === char.toUpperCase();
                     const asciiOffset = isUpper ? 65 : 97;
@@ -179,7 +179,6 @@ export class MoralAuditPrompts {
 }
 
 export class PromptBuilder {
-    private basePrompt = MoralAuditPrompts.AUDIT_SYSTEM_PROMPT;
     private addons: string[] = [];
 
     addContext(context: string): this {
@@ -199,14 +198,14 @@ export class PromptBuilder {
         return this;
     }
 
-    build(primaryShift: string = "3", secondarySeed: string = "1"): string {
-        let prompt = this.basePrompt
-            .replace("{primary_shift}", primaryShift)
-            .replace("{secondary_seed}", secondarySeed);
+    /**
+     * 构建审计提示词，通过 withAuditState 自动注入 nonce 和凯撒密码参数
+     */
+    build(): string {
+        const addons = this.addons.length > 0 ? "\n\n" + this.addons.join("\n\n") : "";
 
-        if (this.addons.length > 0) {
-            prompt += "\n\n" + this.addons.join("\n\n");
-        }
-        return prompt;
+        return MoralAuditPrompts.withAuditState(() => {
+            return MoralAuditPrompts.get_audit_prompt() + addons;
+        });
     }
 }

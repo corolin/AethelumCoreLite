@@ -5,13 +5,6 @@ import { HookType } from '../hooks/types.js';
 import type { HookContext } from '../hooks/types.js';
 import { CoreLiteRouter } from './router.js';
 
-/**
- * 🔥 全局日志函数（由应用层注入）
- */
-declare global {
-  var logRaw: ((message: string) => void) | undefined;
-}
-
 export enum WorkerState {
     INITIALIZING = 'initializing',
     RUNNING = 'running',
@@ -24,6 +17,15 @@ export enum WorkerState {
 export class AsyncAxonWorker {
     public id: string;
     public state: WorkerState;
+
+    /**
+     * 集中的 SINK 安全校验（Router 和 Worker 共用）
+     */
+    public static readonly ALLOWED_SINK_SOURCES = new Set(['Q_AUDIT_OUTPUT', 'AuditOutputWorker']);
+
+    public static isSinkAccessAllowed(source: string): boolean {
+        return AsyncAxonWorker.ALLOWED_SINK_SOURCES.has(source);
+    }
 
     private inputQueue: AsyncSynapticQueue;
     private router: CoreLiteRouter;
@@ -39,6 +41,10 @@ export class AsyncAxonWorker {
     private internalErrorCount: number = 0;
     private lastActiveTimestamp: number = Date.now();
     private processedCount: number = 0;
+    
+    // 心跳与任务追踪（解决假死误判）
+    public processingStartTime: number = 0;
+    public lastHeartbeatTime: number = Date.now();
 
     // 🔥 路由追踪：检测子类是否手动路由过消息
     private hasManuallyRouted: boolean = false;
@@ -96,6 +102,21 @@ export class AsyncAxonWorker {
     public getInternalErrorCount(): number { return this.internalErrorCount; }
     public getLastActiveTime(): number { return this.lastActiveTimestamp; }
     public getProcessedCount(): number { return this.processedCount; }
+    public getIsProcessing(): boolean { return this.isProcessing; }
+
+    /**
+     * 供长耗时子类（如 LLM 输出流）调用的保活心跳
+     */
+    public heartbeat(): void {
+        this.lastHeartbeatTime = Date.now();
+    }
+
+    /**
+     * 供 Monitor 安全地设置 Worker 为错误状态（熔断隔离）
+     */
+    public setErrorState(): void {
+        this.state = WorkerState.ERROR;
+    }
 
     /**
      * 🆕 辅助方法：路由消息并标记为已完成（防止二次路由）
@@ -217,6 +238,10 @@ export class AsyncAxonWorker {
             timestamp: startTime
         };
 
+        // 🔥 更新长时任务监控启动参数
+        this.processingStartTime = startTime;
+        this.heartbeat();
+
         // 🔥 重置手动路由标志（每个新消息都需要重新检测）
         this.hasManuallyRouted = false;
 
@@ -240,13 +265,10 @@ export class AsyncAxonWorker {
             const preResult = await this.preHooks.executeHooks(impulse, HookType.PRE_PROCESS, context);
             if (!preResult) return; // 拦截
 
-            // 3. 🔥 调用子类的 process() 方法（模板方法模式）
+            // 3. 调用子类的 process() 方法（模板方法模式）
             // 子类通过 process() 方法处理消息并手动路由
-            // @ts-ignore - 子类实现 protected process() 方法
-            if (typeof this.process === 'function') {
-                // @ts-ignore
-                await this.process(preResult);
-            }
+            // 默认实现为空操作，子类可覆盖
+            await this.process(preResult);
 
             // 子类 process() 方法中应该手动调用 router.routeMessage()
             // 如果子类没有手动路由，这里会继续执行默认路由逻辑
@@ -312,23 +334,23 @@ export class AsyncAxonWorker {
     }
 
     /**
-     * 严格的 SINK 安全校验 (参照原版的双重保障机制)
+     * 严格的 SINK 安全校验 (使用集中化的校验逻辑)
      */
     private validateSinkSecurity(impulse: NeuralImpulse): boolean {
-        const originalIntent = impulse.actionIntent;
-
-        // 如果目标是最终响应队列 Q_RESPONSE_SINK
-        if (originalIntent === 'Q_RESPONSE_SINK') {
-            const source = impulse.sourceAgent;
-
-            // Node.js 版本简化：只要源头不是经过 Output 审计，就不允许直达 SINK
-            // 这里确保业务 Agent 不能绕过 Audited Output 直接发送响应
-            if (source !== 'Q_AUDIT_OUTPUT' && source !== 'AuditOutputWorker') {
-                console.warn(`[SECURITY VIOLATION] Worker ${this.id} 拒绝非法访问: ${source} 试图绕过审计直达 Q_RESPONSE_SINK`);
+        if (impulse.actionIntent === 'Q_RESPONSE_SINK') {
+            if (!AsyncAxonWorker.isSinkAccessAllowed(impulse.sourceAgent)) {
+                console.warn(`[SECURITY VIOLATION] Worker ${this.id} 拒绝非法访问: ${impulse.sourceAgent} 试图绕过审计直达 Q_RESPONSE_SINK`);
                 return false;
             }
         }
-
         return true;
+    }
+
+    /**
+     * 子类应覆盖此方法实现具体的消息处理逻辑
+     * 默认实现为空操作（基类将使用默认路由）
+     */
+    protected async process(_impulse: NeuralImpulse): Promise<void> {
+        // 默认空操作，子类覆盖
     }
 }

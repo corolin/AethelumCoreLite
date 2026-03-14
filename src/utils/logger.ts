@@ -1,4 +1,4 @@
-import { getStructuredLogger, LogLevel } from './structured_logger';
+import { getStructuredLogger, LogLevel } from './structured_logger.js';
 
 export const setupLogger = (
     name: string,

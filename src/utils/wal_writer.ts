@@ -2,6 +2,24 @@ import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 
+class AsyncMutex {
+    private promise = Promise.resolve();
+    
+    async runExclusive<T>(fn: () => Promise<T>): Promise<T> {
+        let resolve: () => void;
+        const nextPromise = new Promise<void>(res => { resolve = res; });
+        const priorPromise = this.promise;
+        this.promise = priorPromise.then(() => nextPromise);
+
+        try {
+            await priorPromise;
+            return await fn();
+        } finally {
+            resolve!();
+        }
+    }
+}
+
 export class LSNAllocator {
     private currentLsn: number;
 
@@ -26,13 +44,13 @@ export class WALPtrTracker {
         this.ptrPath = ptrPath;
     }
 
-    public start(): void {
-        if (!fs.existsSync(this.ptrPath)) {
-            this.writeLsn(0);
-        } else {
-            const data = fs.readFileSync(this.ptrPath, 'utf8');
+    public async start(): Promise<void> {
+        try {
+            const data = await fs.promises.readFile(this.ptrPath, 'utf8');
             this.committedLsn = parseInt(data, 10) || 0;
             console.log(`[WAL Tracker] 加载位点 LSN: ${this.committedLsn}`);
+        } catch {
+            await this.writeLsn(0);
         }
     }
 
@@ -40,16 +58,16 @@ export class WALPtrTracker {
         return this.committedLsn;
     }
 
-    public commitLsn(lsn: number): void {
+    public async commitLsn(lsn: number): Promise<void> {
         this.committedLsn = lsn;
-        this.writeLsn(lsn);
+        await this.writeLsn(lsn);
     }
 
-    private writeLsn(lsn: number): void {
+    private async writeLsn(lsn: number): Promise<void> {
         // 利用 Node fs 原子重命名写入模拟 mmap 快照
         const tmpPath = `${this.ptrPath}.tmp`;
-        fs.writeFileSync(tmpPath, lsn.toString(), 'utf8');
-        fs.renameSync(tmpPath, this.ptrPath);
+        await fs.promises.writeFile(tmpPath, lsn.toString(), 'utf8');
+        await fs.promises.rename(tmpPath, this.ptrPath);
     }
 
     public stop(): void {
@@ -69,25 +87,30 @@ export class ImprovedWALWriter {
     private currentSegmentNum: number = 0;
     private maxSegmentSize: number;
 
+    // 并发写入保护锁
+    private writeMutex = new AsyncMutex();
+    
+    // Log2 批量防抖位点确认
+    private lastCommittedLsn: number = 0;
+    private commitTimer: NodeJS.Timeout | null = null;
+
     constructor(queueId: string, walDir: string = "wal_data_v2", enableWal: boolean = true, maxSegmentSize: number = 100 * 1024 * 1024) {
         this.queueId = queueId;
         this.walDir = path.join(process.cwd(), walDir, queueId);
         this.enableWal = enableWal;
         this.maxSegmentSize = maxSegmentSize;
-
-        if (this.enableWal) {
-            fs.mkdirSync(this.walDir, { recursive: true });
-        }
     }
 
-    public start(): void {
+    public async start(): Promise<void> {
         if (!this.enableWal) return;
 
+        await fs.promises.mkdir(this.walDir, { recursive: true });
+
         this.ptrTracker = new WALPtrTracker(path.join(this.walDir, 'tracker.ptr'));
-        this.ptrTracker.start();
+        await this.ptrTracker.start();
 
         // 寻找最大的段号，用于初始化 Segment 和 LSN
-        const files = fs.readdirSync(this.walDir).filter(f => f.startsWith('log1_') && f.endsWith('.wal'));
+        const files = (await fs.promises.readdir(this.walDir)).filter(f => f.startsWith('log1_') && f.endsWith('.wal'));
         let maxLsn = this.ptrTracker.getCommittedLsn();
 
         if (files.length > 0) {
@@ -106,32 +129,44 @@ export class ImprovedWALWriter {
     public async writeLog1(messageId: string, priority: number, data: Record<string, any>): Promise<number | null> {
         if (!this.enableWal) return null;
 
-        const lsn = this.lsnAllocator.nextLsn();
-        const payload = JSON.stringify(data);
+        return await this.writeMutex.runExclusive(async () => {
+            const lsn = this.lsnAllocator.nextLsn();
+            const payload = JSON.stringify(data);
 
-        // 生成 checksum (简单 hash)
-        const checksum = crypto.createHash('md5').update(payload).digest('hex').substring(0, 8);
+            // 生成 checksum (简单 hash)
+            const checksum = crypto.createHash('md5').update(payload).digest('hex').substring(0, 8);
 
-        // 格式: LSN|CHECKSUM|PAYLOAD_LENGTH|PAYLOAD\n
-        const record = `${lsn}|${checksum}|${Buffer.byteLength(payload)}|${payload}\n`;
+            // 格式: LSN|CHECKSUM|PAYLOAD_LENGTH|PAYLOAD\n
+            const record = `${lsn}|${checksum}|${Buffer.byteLength(payload)}|${payload}\n`;
 
-        await fs.promises.appendFile(this.currentSegmentPath, record, 'utf8');
+            await fs.promises.appendFile(this.currentSegmentPath, record, 'utf8');
 
-        // 检查文件大小并旋转
-        const stats = await fs.promises.stat(this.currentSegmentPath);
-        if (stats.size >= this.maxSegmentSize) {
-            this.currentSegmentNum++;
-            this.currentSegmentPath = path.join(this.walDir, `log1_${this.currentSegmentNum.toString().padStart(6, '0')}.wal`);
-        }
+            // 检查文件大小并旋转
+            const stats = await fs.promises.stat(this.currentSegmentPath);
+            if (stats.size >= this.maxSegmentSize) {
+                this.currentSegmentNum++;
+                this.currentSegmentPath = path.join(this.walDir, `log1_${this.currentSegmentNum.toString().padStart(6, '0')}.wal`);
+            }
 
-        return lsn;
+            return lsn;
+        });
     }
 
     public writeLog2(messageId: string, lsn?: number): void {
         if (!this.enableWal || lsn === undefined || lsn === null) return;
 
-        // 提交位点
-        this.ptrTracker.commitLsn(lsn);
+        // 更新最后位点
+        this.lastCommittedLsn = lsn;
+
+        // 防抖或缓冲机制，基于时间或批量合并提交 LSN 到 ptr 文件
+        if (!this.commitTimer) {
+            this.commitTimer = setTimeout(() => {
+                this.ptrTracker.commitLsn(this.lastCommittedLsn).catch(err => {
+                    console.error(`[WAL Writer ${this.queueId}] 提交位点失败:`, err);
+                });
+                this.commitTimer = null;
+            }, 500); // 性能与可靠性的绝佳平衡，500ms 写盘一次
+        }
     }
 
     public stop(): void {

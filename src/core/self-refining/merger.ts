@@ -1,26 +1,42 @@
-import { join } from 'path';
+import { join, dirname } from 'path';
+import type { LLMProvider } from '../../types/index.js';
 
 /**
  * PreferenceMerger - 偏好合并器
  *
  * 负责智能合并新旧偏好，处理冲突和去重
+ *
+ * 内置内存级互斥锁，防止并发 mergeAndUpdate 导致丢失更新（Lost Update）。
+ * 当多个 SelfRefiningWorker 同时触发合并时，请求会排队串行执行，
+ * 确保每次"读取 → LLM 融合 → 写入"事务完整且不重叠。
  */
 export class PreferenceMerger {
-    private llmProvider: any;
+    private llmProvider: LLMProvider;
     private refiningPath: string;
+    private mutex: Promise<void> = Promise.resolve();
 
-    constructor(llmProvider: any, basePath: string = '.aethelum') {
+    constructor(llmProvider: LLMProvider, basePath: string = '.aethelum') {
         this.llmProvider = llmProvider;
         this.refiningPath = join(basePath, 'refining.md');
     }
 
     /**
-     * 合并新偏好并更新文件
+     * 合并新偏好并更新文件（互斥执行，防止并发丢失更新）
      */
     async mergeAndUpdate(newPreferences: string[]): Promise<void> {
-        const existing = await this.loadExisting();
-        const merged = await this.smartMerge(existing, newPreferences);
-        await this.save(merged);
+        // 互斥排队：等前一次 mergeAndUpdate 完成后再执行
+        const previous = this.mutex;
+        let release: () => void;
+        this.mutex = new Promise<void>((resolve) => { release = resolve; });
+
+        await previous;
+        try {
+            const existing = await this.loadExisting();
+            const merged = await this.smartMerge(existing, newPreferences);
+            await this.save(merged);
+        } finally {
+            release!();
+        }
     }
 
     private async loadExisting(): Promise<string | null> {
@@ -72,11 +88,9 @@ ${newPrefsText}
     }
 
     private async save(content: string): Promise<void> {
-        const dir = this.refiningPath.split('/').slice(0, -1).join('/');
-        if (!await Bun.file(dir).exists()) {
-            const { mkdir } = await import('fs/promises');
-            await mkdir(dir, { recursive: true });
-        }
+        const dir = dirname(this.refiningPath);
+        const { mkdir } = await import('fs/promises');
+        await mkdir(dir, { recursive: true });
         await Bun.write(this.refiningPath, content);
         console.log(`[PreferenceMerger] Updated refining.md`);
     }

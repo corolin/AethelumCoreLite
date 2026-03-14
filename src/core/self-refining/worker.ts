@@ -1,6 +1,8 @@
 import { AsyncAxonWorker } from '../worker.js';
-import { NeuralImpulse, MessagePriority } from '../message.js';
+import { NeuralImpulse } from '../message.js';
 import { CoreLiteRouter } from '../router.js';
+import { AsyncSynapticQueue } from '../queue.js';
+import type { LLMProvider } from '../../types/index.js';
 import { ConversationAnalyzer } from './analyzer.js';
 import { PreferenceMerger } from './merger.js';
 
@@ -18,10 +20,10 @@ export class SelfRefiningWorker extends AsyncAxonWorker {
 
     constructor(
         id: string,
-        inputQueue: any,
+        inputQueue: AsyncSynapticQueue,
         router: CoreLiteRouter,
         config: {
-            llmProvider: any;
+            llmProvider: LLMProvider;
             reflectionPrompt?: string;
         }
     ) {
@@ -32,9 +34,10 @@ export class SelfRefiningWorker extends AsyncAxonWorker {
 
     protected async process(impulse: NeuralImpulse): Promise<void> {
         // 1. 检查触发来源
-        const triggerSource = impulse.content?.trigger_source;
-        const originalMessages = impulse.content?.original_messages || [];
-        const compressionSummary = impulse.content?.compression_summary;
+        const content = impulse.content;
+        const triggerSource = content?.trigger_source;
+        const originalMessages = content?.original_messages || [];
+        const compressionSummary = content?.compression_summary;
 
         // 只处理来自记忆压缩的触发
         if (triggerSource !== 'compression_complete' || originalMessages.length === 0) {

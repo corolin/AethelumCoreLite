@@ -1,1 +1,1 @@
-export * from './moral_audit_prompts';
+export * from './moral_audit_prompts.js';

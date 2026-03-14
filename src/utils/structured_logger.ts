@@ -116,9 +116,14 @@ export class ConsoleOutput extends LogOutput {
             };
             const reset = '\x1b[0m';
             const color = colors[entry.level] || '';
-            console.log(`${color}${formatted_entry}${reset}`);
+            const output = entry.level >= LogLevel.ERROR ? console.error : console.log;
+            output(`${color}${formatted_entry}${reset}`);
         } else {
-            console.log(formatted_entry);
+            if (entry.level >= LogLevel.ERROR) {
+                console.error(formatted_entry);
+            } else {
+                console.log(formatted_entry);
+            }
         }
     }
 }
@@ -275,4 +280,9 @@ class LoggerManager {
 }
 
 const manager = new LoggerManager();
-export const getStructuredLogger = (name: string, config?: any) => manager.getLogger(name);
+export const getStructuredLogger = (name: string, config?: any) => {
+    if (config) {
+        return manager.createLogger(name, config);
+    }
+    return manager.getLogger(name);
+};

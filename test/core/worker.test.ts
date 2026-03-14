@@ -1,5 +1,5 @@
 import { describe, expect, test, beforeEach, afterEach, spyOn } from "bun:test";
-import { AsyncAxonWorker } from "../../src/core/worker.js";
+import { AsyncAxonWorker, WorkerState } from "../../src/core/worker.js";
 import { CoreLiteRouter } from "../../src/core/router.js";
 import { AsyncSynapticQueue } from "../../src/core/queue.js";
 import { NeuralImpulse, MessageStatus } from "../../src/core/message.js";
@@ -44,13 +44,13 @@ describe("AsyncAxonWorker - Unit Tests", () => {
     });
 
     test("start() and stop() manage state correctly", async () => {
-        expect(worker.state).toBe("initializing");
+        expect(worker.state).toBe(WorkerState.INITIALIZING);
 
         await worker.start();
-        expect(worker.state).toBe("running");
+        expect(worker.state).toBe(WorkerState.RUNNING);
 
         await worker.stop();
-        expect(worker.state).toBe("stopped");
+        expect(worker.state).toBe(WorkerState.STOPPED);
     });
 
     test("processImpulse() executes pre and post hooks", async () => {

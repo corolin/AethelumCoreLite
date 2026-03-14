@@ -1,5 +1,6 @@
 import { Database } from 'bun:sqlite';
-import { LogEntry, LogLevel } from './structured_logger';
+import { LogLevel } from './structured_logger.js';
+import type { LogEntry } from './structured_logger.js';
 import { join } from 'path';
 
 export enum TimeWindow {
@@ -9,8 +10,13 @@ export enum TimeWindow {
     HOUR_1 = 3600,
     HOUR_6 = 21600,
     HOUR_24 = 86400,
-    DAY_1 = 86400,
     WEEK_1 = 604800
+}
+
+export interface LogStatistics {
+    overall: any;
+    by_level: any;
+    by_logger: any;
 }
 
 export class LogAggregator {
@@ -76,7 +82,7 @@ export class LogAggregator {
         );
     }
 
-    public getLogStatistics(timeWindow: TimeWindow = TimeWindow.HOUR_24): any {
+    public getLogStatistics(timeWindow: TimeWindow = TimeWindow.HOUR_24): LogStatistics {
         const endTime = Date.now() / 1000;
         const startTime = endTime - timeWindow;
 

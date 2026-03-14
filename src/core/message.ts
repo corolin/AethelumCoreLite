@@ -1,4 +1,4 @@
-import { v4 as uuidv4 } from 'uuid';
+import { v7 as uuidv7 } from 'uuid';
 import { UnifiedValidator, ValidationResult } from '../utils/unified_validator.js';
 
 export enum MessagePriority {
@@ -46,18 +46,18 @@ export class NeuralImpulse {
   public metadata: Record<string, any>;
   public routingHistory: string[];
   public priority: MessagePriority;
-  public expiresAt?: number | undefined;
+  public expiresAt: number | undefined;
   public status: MessageStatus;
   public timestamp: number;
 
   constructor(options: NeuralImpulseOptions) {
-    this.messageId = options.messageId || uuidv4();
-    this.sessionId = options.sessionId || uuidv4();
+    this.messageId = options.messageId ?? uuidv7();
+    this.sessionId = options.sessionId ?? uuidv7();
     this.actionIntent = options.actionIntent;
-    this.sourceAgent = options.sourceAgent || 'System';
-    this.inputSource = options.inputSource || 'System';
-    this.content = options.content || null;
-    this.metadata = options.metadata || {};
+    this.sourceAgent = options.sourceAgent ?? 'System';
+    this.inputSource = options.inputSource ?? 'System';
+    this.content = options.content ?? null;
+    this.metadata = options.metadata ?? {};
     this.priority = options.priority !== undefined ? options.priority : MessagePriority.NORMAL;
     this.expiresAt = options.expiresAt;
 

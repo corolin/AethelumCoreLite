@@ -1,4 +1,6 @@
 import { CoreLiteRouter } from '../src/core/router.js';
+import { AsyncSynapticQueue } from '../src/core/queue.js';
+import { AsyncAxonWorker } from '../src/core/worker.js';
 import { NeuralImpulse, MessagePriority } from '../src/core/message.js';
 import { BaseAsyncHook } from '../src/hooks/chain.js';
 import { HookType } from '../src/hooks/types.js';
@@ -97,10 +99,26 @@ async function runDemo() {
     const router = new CoreLiteRouter();
 
     // 1. 注册工作器
-    const inputWorker = router.registerWorker('AuditInputWorker', 'Q_AUDIT_INPUT');
-    const bizWorker = router.registerWorker('BusinessBIZWorker', 'Q_AUDITED_INPUT');
-    const outputWorker = router.registerWorker('AuditOutputWorker', 'Q_AUDIT_OUTPUT');
-    const sinkWorker = router.registerWorker('ResponseSinkWorker', 'Q_RESPONSE_SINK');
+    // 实例化工作器之前需要实例化对应的队列
+    const qInput = new AsyncSynapticQueue('Q_AUDIT_INPUT', 1000);
+    const qBiz = new AsyncSynapticQueue('Q_AUDITED_INPUT', 1000);
+    const qOutput = new AsyncSynapticQueue('Q_AUDIT_OUTPUT', 1000);
+    const qSink = new AsyncSynapticQueue('Q_RESPONSE_SINK', 1000);
+
+    router.registerQueue(qInput);
+    router.registerQueue(qBiz);
+    router.registerQueue(qOutput);
+    router.registerQueue(qSink);
+
+    const inputWorker = new AsyncAxonWorker('AuditInputWorker', qInput, router);
+    const bizWorker = new AsyncAxonWorker('BusinessBIZWorker', qBiz, router);
+    const outputWorker = new AsyncAxonWorker('AuditOutputWorker', qOutput, router);
+    const sinkWorker = new AsyncAxonWorker('ResponseSinkWorker', qSink, router);
+
+    router.registerWorker(inputWorker);
+    router.registerWorker(bizWorker);
+    router.registerWorker(outputWorker);
+    router.registerWorker(sinkWorker);
 
     // 2. 将 Hook 绑定到他们的前置处理链
     inputWorker.getPreHooks().addHook(new InputAuditHook());

@@ -4,13 +4,6 @@ import { NeuralImpulse, MessageStatus } from './message.js';
 import { AsyncWorkerMonitor } from './monitor.js';
 import { AsyncErrorHandler } from './error_handler.js';
 
-/**
- * 🔥 全局日志函数（由应用层注入）
- */
-declare global {
-  var logRaw: ((message: string) => void) | undefined;
-}
-
 export class CoreLiteRouter {
     private queues: Map<string, AsyncSynapticQueue> = new Map();
     private workers: Map<string, AsyncAxonWorker> = new Map();
@@ -132,11 +125,10 @@ export class CoreLiteRouter {
         impulse.metadata['current_queue'] = targetQueueId;
         impulse.metadata['routing_timestamp'] = Date.now();
 
-        // SINK 终点保护机制（双重拦截之一，另一个在 Worker 内部）
+        // SINK 终点保护机制（使用集中化的校验逻辑）
         if (targetQueueId === 'Q_RESPONSE_SINK') {
-            const source = impulse.sourceAgent;
-            if (source !== 'Q_AUDIT_OUTPUT' && source !== 'AuditOutputWorker') {
-                const securityMsg = `[ROUTER SECURITY] 尝试直达 SINK 被拦截: source=${source}`;
+            if (!AsyncAxonWorker.isSinkAccessAllowed(impulse.sourceAgent)) {
+                const securityMsg = `[ROUTER SECURITY] 尝试直达 SINK 被拦截: source=${impulse.sourceAgent}`;
                 console.warn(securityMsg);
                 globalThis.logRaw?.(securityMsg);
                 targetQueueId = 'Q_ERROR';
@@ -156,9 +148,9 @@ export class CoreLiteRouter {
         let queue = this.queues.get(targetQueueId);
         if (!queue) {
             // 动态创建队列（支持插件形式的临时 Agent 通信）
-            const createMsg = `📦 [QUEUE] 动态创建新队列: ${targetQueueId}`;
-            console.log(createMsg);
-            globalThis.logRaw?.(createMsg);
+            // 注意：频繁动态创建可能表示 actionIntent 配置有误，请检查
+            console.warn(`[QUEUE] 动态创建新队列: ${targetQueueId} (session: ${impulse.sessionId}, source: ${impulse.sourceAgent})`);
+            globalThis.logRaw?.(`[QUEUE] 动态创建新队列: ${targetQueueId}`);
             queue = new AsyncSynapticQueue(targetQueueId, 1000);
             this.queues.set(targetQueueId, queue);
         }

@@ -32,10 +32,10 @@ export const PerformanceConfigSchema = z.object({
 });
 
 export const AppConfigSchema = z.object({
-  system: SystemConfigSchema.default({}),
-  monitoring: MonitoringConfigSchema.default({}),
-  api: APIConfigSchema.default({}),
-  performance: PerformanceConfigSchema.default({}),
+  system: SystemConfigSchema.default(() => SystemConfigSchema.parse({})),
+  monitoring: MonitoringConfigSchema.default(() => MonitoringConfigSchema.parse({})),
+  api: APIConfigSchema.default(() => APIConfigSchema.parse({})),
+  performance: PerformanceConfigSchema.default(() => PerformanceConfigSchema.parse({})),
 });
 
 export type MonitoringConfig = z.infer<typeof MonitoringConfigSchema>;
@@ -91,19 +91,19 @@ export class ConfigLoader {
     return AppConfigSchema.parse({});
   }
 
-  public static getMonitoringConfig(config: any): MonitoringConfig {
+  public static getMonitoringConfig(config: AppConfig): MonitoringConfig {
     return MonitoringConfigSchema.parse(config.monitoring || {});
   }
 
-  public static getSystemConfig(config: any): SystemConfig {
+  public static getSystemConfig(config: AppConfig): SystemConfig {
     return SystemConfigSchema.parse(config.system || {});
   }
 
-  public static getApiConfig(config: any): APIConfig {
+  public static getApiConfig(config: AppConfig): APIConfig {
     return APIConfigSchema.parse(config.api || {});
   }
 
-  public static getPerformanceConfig(config: any): PerformanceConfig {
+  public static getPerformanceConfig(config: AppConfig): PerformanceConfig {
     return PerformanceConfigSchema.parse(config.performance || {});
   }
 }

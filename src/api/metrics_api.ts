@@ -1,14 +1,13 @@
 import { Hono } from 'hono';
-import { bearerAuth } from 'hono/bearer-auth';
-import type { AsyncSomaRouter } from '../core/router';
+import type { CoreLiteRouter } from '../core/router.js';
 
 export class MetricsAPI {
     public app: Hono;
-    private _router: AsyncSomaRouter | null;
+    private _router: CoreLiteRouter | null;
     private _apiKey: string;
     private _requireAuth: boolean;
 
-    constructor(router: AsyncSomaRouter | null = null, apiKey?: string) {
+    constructor(router: CoreLiteRouter | null = null, apiKey?: string) {
         if (!apiKey) {
             throw new Error("必须设置apiKey（安全要求：禁止无认证访问）");
         }
@@ -22,10 +21,13 @@ export class MetricsAPI {
     }
 
     private setupRoutes() {
-        // Middleware for Auth
+        // Middleware for Auth — 直接读取 this._apiKey，确保 setApiKey() 轮换后立即生效
         this.app.use('/api/v1/*', async (c, next) => {
-            const auth = bearerAuth({ token: this._apiKey });
-            return auth(c, next);
+            const authHeader = c.req.header('Authorization');
+            if (!authHeader || !authHeader.startsWith('Bearer ') || authHeader.slice(7) !== this._apiKey) {
+                return c.json({ error: 'Unauthorized' }, 401);
+            }
+            await next();
         });
 
         this.app.get('/api/v1/health', (c) => {
@@ -41,16 +43,13 @@ export class MetricsAPI {
             if (!this._router) {
                 return c.json({ detail: "Router not initialized" }, 503);
             }
-            // Assuming getMetrics() exists or we map to router.getStats()
-            const metrics = typeof (this._router as any).getMetrics === 'function'
-                ? await (this._router as any).getMetrics()
-                : await (this._router as any).getStats?.() || {};
+            const metrics = this._router.getQueueMetrics();
 
             return c.json(metrics);
         });
     }
 
-    public setRouter(router: AsyncSomaRouter) {
+    public setRouter(router: CoreLiteRouter) {
         this._router = router;
     }
 
@@ -67,7 +66,7 @@ export class MetricsAPIServer {
     constructor(
         public host: string = "127.0.0.1",
         public port: number = 8080,
-        router: AsyncSomaRouter | null = null,
+        router: CoreLiteRouter | null = null,
         apiKey?: string
     ) {
         if (!apiKey) {
@@ -82,7 +81,7 @@ export class MetricsAPIServer {
             port: this.port,
             hostname: this.host
         });
-        console.log(`Metrics API Server strted on http://${this.host}:${this.port}`);
+        console.log(`Metrics API Server started on http://${this.host}:${this.port}`);
     }
 
     public getApp() {

@@ -1,4 +1,5 @@
 import { join } from 'path';
+import type { LLMProvider } from '../../types/index.js';
 
 /**
  * ConversationAnalyzer - 对话分析器
@@ -6,10 +7,10 @@ import { join } from 'path';
  * 负责分析压缩后的对话，提取用户的偏好和纠正信息
  */
 export class ConversationAnalyzer {
-    private llmProvider: any;
+    private llmProvider: LLMProvider;
     private refiningPath: string;
 
-    constructor(llmProvider: any, _customPrompt?: string) {
+    constructor(llmProvider: LLMProvider, _customPrompt?: string) {
         this.llmProvider = llmProvider;
         this.refiningPath = join('.aethelum', 'refining.md');
     }
@@ -20,7 +21,7 @@ export class ConversationAnalyzer {
      * @returns 偏好列表，如果没有则返回空数组
      */
     async extractPreferences(data: {
-        original_messages: any[];
+        original_messages: unknown[];
         compression_summary: string;
     }): Promise<string[]> {
         // 1. 读取现有的自我进化配置
@@ -96,7 +97,7 @@ ${compressionSummary}
     private parseResponse(content: string): string[] {
         try {
             // 尝试提取 JSON（处理可能的额外文本）
-            const jsonMatch = content.match(/\{[\s\S]*\}/);
+            const jsonMatch = content.match(/\{[\s\S]*?\}/);
             if (!jsonMatch) return [];
 
             const parsed = JSON.parse(jsonMatch[0]);

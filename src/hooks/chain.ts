@@ -55,17 +55,29 @@ export class AsyncHookChain {
             if (!currentImpulse) break; // 若前面的 Hook 将脉冲置为 null，则终止链式调用
 
             try {
-                const executePromise = hook.executeAsync(currentImpulse, context);
-
                 let result: NeuralImpulse | null;
 
                 if (hook.timeoutMs > 0) {
-                    const timeoutPromise = new Promise<never>((_, reject) =>
-                        setTimeout(() => reject(new Error(`Hook ${hook.name} timeout`)), hook.timeoutMs)
-                    );
-                    result = await Promise.race([executePromise, timeoutPromise]);
+                    // 创建 AbortController，超时时触发 abort 通知 Hook 实现终止外部 I/O
+                    const abortController = new AbortController();
+                    const hookContext = { ...context, signal: abortController.signal };
+
+                    const executePromise = hook.executeAsync(currentImpulse, hookContext);
+
+                    let timer: ReturnType<typeof setTimeout> | undefined;
+                    const timeoutPromise = new Promise<never>((_, reject) => {
+                        timer = setTimeout(() => {
+                            abortController.abort();
+                            reject(new Error(`Hook ${hook.name} timeout`));
+                        }, hook.timeoutMs);
+                    });
+                    try {
+                        result = await Promise.race([executePromise, timeoutPromise]);
+                    } finally {
+                        if (timer !== undefined) clearTimeout(timer);
+                    }
                 } else {
-                    result = await executePromise;
+                    result = await hook.executeAsync(currentImpulse, context);
                 }
 
                 if (result) {

@@ -20,7 +20,15 @@ export interface HookContext {
     workerId: string;
     queueId: string;
     timestamp: number;
-    [key: string]: any;
+    error?: unknown;
+    stage?: string;
+    /**
+     * 中止信号，由 HookChain 在超时时触发。
+     * Hook 实现应检查此信号以提前终止外部 I/O 操作（fetch、文件读写等），
+     * 避免超时后仍产生副作用或资源泄漏。
+     */
+    signal?: AbortSignal;
+    [key: string]: unknown;
 }
 
 export interface AsyncHook {
