@@ -107,6 +107,7 @@ export class AsyncErrorHandler {
         const errorImpulse = new NeuralImpulse({
             sessionId: originalSessionId, // 继承导致错误的会话
             actionIntent: 'Q_ERROR',
+            sourceAgent: originalSource,  // 保留原始来源 Agent，便于追溯
             content: error.message,
             priority: MessagePriority.CRITICAL // 通常错误具有更高的优先级
         });

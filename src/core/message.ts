@@ -87,7 +87,7 @@ export class NeuralImpulse {
    * 检查消息是否过期
    */
   public isExpired(): boolean {
-    if (!this.expiresAt) return false;
+    if (this.expiresAt === undefined) return false;
     return Date.now() > this.expiresAt;
   }
 
@@ -95,7 +95,7 @@ export class NeuralImpulse {
    * 获取剩余生存时间（ms）
    */
   public getTTL(): number | null {
-    if (!this.expiresAt) return null;
+    if (this.expiresAt === undefined) return null;
     return Math.max(0, this.expiresAt - Date.now());
   }
 

@@ -96,11 +96,12 @@ ${compressionSummary}
 
     private parseResponse(content: string): string[] {
         try {
-            // 尝试提取 JSON（处理可能的额外文本）
-            const jsonMatch = content.match(/\{[\s\S]*?\}/);
-            if (!jsonMatch) return [];
+            // 用首尾大括号定位 JSON 对象，避免正则回溯导致的 ReDoS 风险
+            const firstBrace = content.indexOf('{');
+            const lastBrace = content.lastIndexOf('}');
+            if (firstBrace === -1 || lastBrace === -1 || lastBrace < firstBrace) return [];
 
-            const parsed = JSON.parse(jsonMatch[0]);
+            const parsed = JSON.parse(content.slice(firstBrace, lastBrace + 1));
             if (parsed.has_new_preferences && parsed.preferences) {
                 return parsed.preferences;
             }
