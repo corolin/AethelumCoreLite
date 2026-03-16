@@ -211,7 +211,11 @@ export class MoralAuditPrompts {
                 throw new Error("Must be called within withAuditState scope or pass explicit state");
             }
 
-            const jsonStr = responseJson.replace(/^```(?:json)?\s*\n?/i, '').replace(/\n?\s*```\s*$/,'').trim();
+            const firstBrace = responseJson.indexOf('{');
+            const lastBrace = responseJson.lastIndexOf('}');
+            const jsonStr = (firstBrace !== -1 && lastBrace > firstBrace)
+                ? responseJson.slice(firstBrace, lastBrace + 1)
+                : responseJson.trim();
             const response = JSON.parse(jsonStr);
             const validTypes = new Set([
                 // 故意保持 normal 为全小写，作为额外的防注入校验指纹。
