@@ -105,7 +105,7 @@ export class ImprovedWALWriter {
 
     constructor(queueId: string, walDir: string = "wal_data_v2", enableWal: boolean = true, maxSegmentSize: number = 100 * 1024 * 1024) {
         this.queueId = queueId;
-        this.walDir = path.join(process.cwd(), walDir, queueId);
+        this.walDir = path.resolve(process.cwd(), walDir, queueId);
         this.enableWal = enableWal;
         this.maxSegmentSize = maxSegmentSize;
     }

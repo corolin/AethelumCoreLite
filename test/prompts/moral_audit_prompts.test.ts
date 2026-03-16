@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { MoralAuditPrompts } from "../../src/prompts/moral_audit_prompts.js";
+import { MoralAuditPrompts, PromptBuilder } from "../../src/prompts/moral_audit_prompts.js";
 
 /**
  * 测试凯撒密码反注入机制：
@@ -167,8 +167,66 @@ describe("MoralAuditPrompts.validate_audit_response - Anti-Injection Token Tests
                 });
 
                 const result = MoralAuditPrompts.validate_audit_response(response);
-                expect(result.valid).toBe(true, `Type "${violationType}" should be valid`);
+                expect(result.valid).toBe(true);
             });
         }
+    });
+    test("get_audit_prompt generates valid prompt", () => {
+        MoralAuditPrompts.withAuditState(() => {
+            const prompt = MoralAuditPrompts.get_audit_prompt();
+            expect(prompt).toContain("status_code");
+        });
+    });
+
+    test("get_companion_prompt generates valid prompt", () => {
+        const prompt = MoralAuditPrompts.get_companion_prompt("Violence");
+        expect(prompt).toContain("Violence");
+    });
+
+    test("validate_audit_response failure branch (invalid access)", () => {
+        // Calling without withAuditState
+        const result = MoralAuditPrompts.validate_audit_response("{}");
+        expect(result.valid).toBe(false);
+        expect(result.error).toContain("Must be called within withAuditState scope");
+    });
+
+    test("PromptBuilder builds complex prompt", () => {
+        const builder = new PromptBuilder();
+        const prompt = builder
+            .addContext("context info")
+            .addConstraints(["do not lie"])
+            .addExamples([{ input: "hi", output: "hello" }])
+            .build();
+        
+        expect(prompt).toContain("context info");
+        expect(prompt).toContain("do not lie");
+        expect(prompt).toContain("hi");
+    });
+
+    test("get_current_nonce fallback", () => {
+        const nonce = MoralAuditPrompts.get_current_nonce();
+        expect(nonce).toBe('default_nonce_16');
+    });
+
+    test("_encrypt_caesar catch block coverage", () => {
+        // We need to trigger an error inside _encrypt_caesar loop
+        // It's private so we use any. 
+        // passing something that charCodeAt(0) fails on might work if it's not a string
+        const result = (MoralAuditPrompts as any)._encrypt_caesar(null, 1);
+        expect(result).toBe(null);
+    });
+
+    test("validate_audit_response unexpected error coverage", () => {
+        MoralAuditPrompts.withAuditState(() => {
+            // Mock JSON.parse to throw non-SyntaxError
+            const originalParse = JSON.parse;
+            JSON.parse = () => { throw new Error("Unexpected"); };
+            
+            const result = MoralAuditPrompts.validate_audit_response("{}");
+            expect(result.valid).toBe(false);
+            expect(result.error).toContain("Unexpected error");
+            
+            JSON.parse = originalParse;
+        });
     });
 });

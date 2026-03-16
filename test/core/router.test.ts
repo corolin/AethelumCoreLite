@@ -7,7 +7,7 @@ describe("CoreLiteRouter - Unit Tests", () => {
     let router: CoreLiteRouter;
 
     beforeEach(() => {
-        router = new CoreLiteRouter();
+        router = new CoreLiteRouter(false);
         router.activate(); // Router needs to be active to route messages
     });
 
@@ -95,5 +95,10 @@ describe("CoreLiteRouter - Unit Tests", () => {
         const retrieved = await qDynamo.asyncGet(10);
         expect(retrieved).not.toBeNull();
         expect(retrieved?.messageId).toBe(impulse.messageId);
+    });
+    test("getQueueMetrics() returns metrics for all queues and workers", () => {
+        const metrics = router.getQueueMetrics();
+        expect(metrics.queues["Q_ERROR"]).toBeDefined();
+        expect(metrics.workers).toBeDefined();
     });
 });
