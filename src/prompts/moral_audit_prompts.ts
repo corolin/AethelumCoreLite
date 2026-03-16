@@ -1,9 +1,12 @@
+import crypto from 'crypto';
 import { AsyncLocalStorage } from 'async_hooks';
+import { auditLogger } from '../utils/logger.js';
 
 interface AuditState {
     nonce: string;
     caesarShiftClear: string;
     caesarShiftDirty: string;
+    isInverted: boolean;
 }
 
 const auditStorage = new AsyncLocalStorage<AuditState>();
@@ -59,6 +62,7 @@ export class MoralAuditPrompts {
 返回的JSON必须精确匹配以下结构：
 {
   "nonce": "{nonce}",
+  "thought": "在此逐步分析用户输入的意图，判断其是否违反了上述任一原则。请先完成分析，再给出最终结论。",
   "status_code": "",
   "type": "如果状态码对应**安全内容**则为'normal'；如果状态码对应**不安全内容**，则根据违规类型给出对应的英文单词（RoleHijacking, SecurityViolation, SuicideSelfHarm, HarmToOthers, AnimalAbuse, SexualContent, IllegalActivity, Violence）"
 }`;
@@ -107,17 +111,21 @@ export class MoralAuditPrompts {
      * 同时隔离不同并发请求，避免跨请求污染。
      */
     static withAuditState<T>(callback: () => T): T {
-        const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-        let nonce = '';
-        for (let i = 0; i < 16; i++) {
-            nonce += chars.charAt(Math.floor(Math.random() * chars.length));
-        }
-        const caesarShift = Math.floor(Math.random() * 25) + 1;
+        const nonce = crypto.randomBytes(12).toString('base64url'); // 16 chars
+        const caesarShift = crypto.randomInt(1, 26); // 1–25
+        const isInverted = crypto.randomInt(0, 2) === 1; // 50% 语义反转
         const state: AuditState = {
             nonce,
-            caesarShiftClear: this._encrypt_caesar("CLEAR", caesarShift),
-            caesarShiftDirty: this._encrypt_caesar("DIRTY", caesarShift)
+            caesarShiftClear: this._encrypt_caesar(isInverted ? "DIRTY" : "CLEAR", caesarShift),
+            caesarShiftDirty: this._encrypt_caesar(isInverted ? "CLEAR" : "DIRTY", caesarShift),
+            isInverted
         };
+        auditLogger.info("audit_state_created", {
+            nonce,
+            isInverted,
+            shift: caesarShift,
+            mapping: { CLEAR: state.caesarShiftClear, DIRTY: state.caesarShiftDirty }
+        });
         return auditStorage.run(state, callback);
     }
 
@@ -167,9 +175,13 @@ export class MoralAuditPrompts {
                 throw new Error("Must be called within withAuditState scope");
             }
 
-            const response = JSON.parse(responseJson);
+            const jsonStr = responseJson.replace(/^```(?:json)?\s*\n?/i, '').replace(/\n?\s*```\s*$/,'').trim();
+            const response = JSON.parse(jsonStr);
             const validTypes = new Set([
-                'normal', 'RoleHijacking', 'SecurityViolation', 'SuicideSelfHarm', 'HarmToOthers',
+                // 故意保持 normal 为全小写，作为额外的防注入校验指纹。
+                // 同时模型在受到压力测试或长文本干扰时，容易产生格式漂移。如果模型返回了 Normal，说明它此时正处于“泛化推理”状态，而不是在“严格执行你的 JSON 协议”。
+                'normal', // 注意：此处必须保持全小写
+                'RoleHijacking', 'SecurityViolation', 'SuicideSelfHarm', 'HarmToOthers',
                 'AnimalAbuse', 'SexualContent', 'IllegalActivity', 'Violence'
             ]);
 
@@ -194,11 +206,15 @@ export class MoralAuditPrompts {
             const valid = true;
             const security_threat = false;
             const type = responseType;
+            const thought = typeof response.thought === 'string' ? response.thought : '';
             let status = null;
-            if (encryptedStatus === state.caesarShiftClear) status = 'CLEAR';
-            else if (encryptedStatus === state.caesarShiftDirty) status = 'DIRTY';
+            if (encryptedStatus === state.caesarShiftClear) {
+                status = state.isInverted ? 'DIRTY' : 'CLEAR';
+            } else if (encryptedStatus === state.caesarShiftDirty) {
+                status = state.isInverted ? 'CLEAR' : 'DIRTY';
+            }
 
-            return { valid, error: null, security_threat, status, type };
+            return { valid, error: null, security_threat, status, type, thought };
 
         } catch (e: any) {
             return {
