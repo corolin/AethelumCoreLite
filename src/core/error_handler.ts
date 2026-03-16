@@ -1,5 +1,5 @@
 import { CoreLiteRouter } from './router.js';
-import { NeuralImpulse, MessagePriority } from './message.js';
+import { NeuralImpulse, MessagePriority, MessageStatus } from './message.js';
 
 export enum AsyncErrorType {
     VALIDATION_ERROR = "validation_error",
@@ -56,6 +56,10 @@ export class AsyncErrorHandler {
             `消息: ${error.message}, ` +
             `上下文: ${JSON.stringify(context)}`
         );
+
+        if (impulse) {
+            impulse.status = MessageStatus.FAILED;
+        }
 
         // 创建错误脉冲
         const errorImpulse = this.createErrorImpulse(error, impulse, errorType, context);

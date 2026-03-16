@@ -8,10 +8,12 @@ export class CoreLiteRouter {
     private queues: Map<string, AsyncSynapticQueue> = new Map();
     private workers: Map<string, AsyncAxonWorker> = new Map();
     private isActive: boolean = false;
+    private enableWal: boolean;
     public monitor: AsyncWorkerMonitor;
     public errorHandler: AsyncErrorHandler;
 
-    constructor() {
+    constructor(enableWal: boolean = true) {
+        this.enableWal = enableWal;
         this.setupBuiltinQueues();
         this.monitor = new AsyncWorkerMonitor();
         this.errorHandler = new AsyncErrorHandler(this);
@@ -32,7 +34,7 @@ export class CoreLiteRouter {
         ];
 
         for (const queueId of builtinQueues) {
-            this.queues.set(queueId, new AsyncSynapticQueue(queueId, 1000));
+            this.queues.set(queueId, new AsyncSynapticQueue(queueId, 1000, this.enableWal));
         }
 
         // 终端队列不需要 WAL（最终归宿，无进一步移交）
@@ -162,7 +164,7 @@ export class CoreLiteRouter {
             // 注意：频繁动态创建可能表示 actionIntent 配置有误，请检查
             console.warn(`[QUEUE] 动态创建新队列: ${targetQueueId} (session: ${impulse.sessionId}, source: ${impulse.sourceAgent})`);
             globalThis.logRaw?.(`[QUEUE] 动态创建新队列: ${targetQueueId}`);
-            queue = new AsyncSynapticQueue(targetQueueId, 1000);
+            queue = new AsyncSynapticQueue(targetQueueId, 1000, this.enableWal);
             this.queues.set(targetQueueId, queue);
         }
 
