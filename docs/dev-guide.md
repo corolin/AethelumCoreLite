@@ -67,7 +67,7 @@ Zod schema 定义（`AppConfigSchema`），从 TOML 文件加载（`config.toml`
 
 ### 道德审计提示词（`src/prompts/`）
 
-`MoralAuditPrompts`：内容安全审计系统，使用凯撒密码生成随机 token 防止提示词注入。通过 `AsyncLocalStorage` 绑定每次请求的 nonce 和密文 token。`PromptBuilder`：链式构建审计提示词。
+`MoralAuditPrompts`：内容安全审计系统，每次请求生成一对互不相同的随机 5 字母 token（CSPRNG），通过 `AsyncLocalStorage` 绑定 nonce 和 token 到当前异步调用链。校验层执行 nonce 一致性、token 合法性、status/type 一致性三层检查。`PromptBuilder`：链式构建审计提示词，`build()` 返回 `{ prompt, state }` 供后续 `validate_audit_response(response, state)` 使用。
 
 ### 全局类型
 
