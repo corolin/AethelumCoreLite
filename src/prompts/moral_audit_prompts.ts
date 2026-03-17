@@ -10,7 +10,7 @@ export interface AuditState {
     readonly tokenDirty: string;
 }
 
-type ViolationType =
+export type ViolationType =
     | 'RoleHijacking' | 'SecurityViolation' | 'SuicideSelfHarm'
     | 'HarmToOthers' | 'AnimalAbuse' | 'SexualContent'
     | 'IllegalActivity' | 'Violence';
@@ -179,7 +179,7 @@ export class MoralAuditPrompts {
             .replace("{token_dirty}", state.tokenDirty);
     }
 
-    static get_companion_prompt(violationType: string): string {
+    static get_companion_prompt(violationType: ViolationType | 'Unknown'): string {
         return this.COMPANION_RESPONSE_TEMPLATE.replace("{violation_type}", violationType);
     }
 
@@ -258,16 +258,27 @@ export class MoralAuditPrompts {
                 };
             }
 
-            const thought = typeof response.thought === 'string' ? response.thought : '';
+            const thought = response.thought;
+            if (typeof thought !== 'string' || thought.trim().length === 0) {
+                return {
+                    valid: false,
+                    error: "SECURITY ALERT: missing or invalid thought field",
+                    security_threat: true,
+                    threat_type: null,
+                    status: 'BLOCKED',
+                    type: 'SecurityViolation'
+                };
+            }
             const status = isClearToken ? 'CLEAR' : 'DIRTY';
             const type = responseType as 'normal' | ViolationType;
 
             return { valid: true, error: null, status, type, thought };
 
-        } catch (e: any) {
+        } catch (e: unknown) {
+            const msg = e instanceof Error ? e.message : String(e);
             return {
                 valid: false,
-                error: e instanceof SyntaxError ? `JSON decode error: ${e.message}` : `Unexpected error: ${e.message}`,
+                error: `Unexpected error: ${msg}`,
                 status: null,
                 type: null
             };
@@ -279,19 +290,19 @@ export class PromptBuilder {
     private addons: string[] = [];
 
     addContext(context: string): this {
-        this.addons.push(`## 上下文信息\n${context} `);
+        this.addons.push(`## 上下文信息\n${context}`);
         return this;
     }
 
     addConstraints(constraints: string[]): this {
-        const text = constraints.map(c => `- ${c} `).join('\n');
-        this.addons.push(`## 额外约束\n${text} `);
+        const text = constraints.map(c => `- ${c}`).join('\n');
+        this.addons.push(`## 额外约束\n${text}`);
         return this;
     }
 
     addExamples(examples: { input: string; output: string }[]): this {
-        const text = examples.map(ex => `- 输入: ${ex.input} \n  输出: ${ex.output} `).join('\n');
-        this.addons.push(`## 示例\n${text} `);
+        const text = examples.map(ex => `- 输入: ${ex.input}\n  输出: ${ex.output}`).join('\n');
+        this.addons.push(`## 示例\n${text}`);
         return this;
     }
 
@@ -301,6 +312,7 @@ export class PromptBuilder {
      */
     build(): { prompt: string; state: AuditState } {
         const addons = this.addons.length > 0 ? "\n\n" + this.addons.join("\n\n") : "";
+        this.addons = [];
 
         return MoralAuditPrompts.withAuditState(() => {
             const store = auditStorage.getStore()!;
