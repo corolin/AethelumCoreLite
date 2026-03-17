@@ -110,4 +110,50 @@ describe("AsyncAxonWorker - Unit Tests", () => {
 
         await autoWorker.stop();
     });
+    test("Base class default process() is a no-op", async () => {
+        // Create a worker without overriding process
+        const bareWorker = new (class extends AsyncAxonWorker { })("BareAgent", inputQueue, router);
+        const impulse = new NeuralImpulse({ actionIntent: "Done" });
+        
+        // This should not throw
+        await (bareWorker as any).processImpulse(impulse);
+    });
+
+    test("runLoop error handling", async () => {
+        const spy = spyOn(console, "error").mockImplementation(() => {});
+        // Mock asyncGet to throw
+        inputQueue.asyncGet = async () => { throw new Error("Loop fail"); };
+        
+        await worker.start();
+        await new Promise(r => setTimeout(r, 60)); // Let loop run
+        
+        expect(worker.state).toBe(WorkerState.RUNNING); // Loop continues but logs error
+        expect(spy).toHaveBeenCalledWith(expect.stringContaining("处理循环异常"), expect.any(Error));
+        
+        spy.mockRestore();
+    });
+
+    test("runLoop fatal error log (outer catch)", async () => {
+        const spy = spyOn(console, "error").mockImplementation(() => {});
+        // Mock runLoop to throw immediately (before its own try-catch)
+        const originalRunLoop = (worker as any).runLoop;
+        (worker as any).runLoop = async () => { throw new Error("Fatal loop"); };
+        
+        await worker.start();
+        // The catch block is async, wait a bit
+        await new Promise(r => setTimeout(r, 20));
+        
+        expect(worker.state).toBe(WorkerState.ERROR);
+        expect(spy).toHaveBeenCalledWith(expect.stringContaining("发生致命错误"), expect.any(Error));
+        
+        spy.mockRestore();
+        (worker as any).runLoop = originalRunLoop;
+    });
+
+    test("validateSinkSecurity coverage", async () => {
+        const impulse = new NeuralImpulse({ actionIntent: "NotSink" });
+        // Should hit the "return true" at the end of validateSinkSecurity
+        const result = (worker as any).validateSinkSecurity(impulse);
+        expect(result).toBe(true);
+    });
 });

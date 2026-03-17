@@ -27,12 +27,14 @@ export class AsyncSynapticQueue {
     private walWriter: ImprovedWALWriter | null = null;
     private enableWal: boolean;
     private walReady: Promise<void> | null = null;
+    public autoExpand: boolean;
     private baseCapacity: number;
     private shrinkTimer: NodeJS.Timeout | null = null;
 
-    constructor(queueId: string, maxSize: number = 0, enableWal: boolean = true) {
+    constructor(queueId: string, maxSize: number = 0, enableWal: boolean = true, autoExpand: boolean = true, shrinkIntervalMs: number = 10 * 60 * 1000) {
         this.queueId = queueId;
         this.maxSize = maxSize;
+        this.autoExpand = autoExpand;
         this.baseCapacity = maxSize;
         this.enableWal = enableWal;
 
@@ -66,7 +68,7 @@ export class AsyncSynapticQueue {
         };
 
         // 启动定时缩容检查
-        this.startShrinkTimer();
+        this.startShrinkTimer(shrinkIntervalMs);
     }
 
     /**
@@ -74,10 +76,16 @@ export class AsyncSynapticQueue {
      */
     public async asyncPut(item: NeuralImpulse): Promise<boolean> {
         if (this.maxSize > 0 && this.metrics.size >= this.maxSize) {
-            // 动态扩容：每次增加 10%
-            this.maxSize = Math.ceil(this.maxSize * 1.1);
-            this.metrics.capacity = this.maxSize;
-            console.log(`[QUEUE ${this.queueId}] 动态扩容至 ${this.maxSize}`);
+            if (this.autoExpand) {
+                // 动态扩容：每次增加 10%
+                this.maxSize = Math.ceil(this.maxSize * 1.1);
+                this.metrics.capacity = this.maxSize;
+                console.log(`[QUEUE ${this.queueId}] 动态扩容至 ${this.maxSize}`);
+            } else {
+                // 不自动扩容，拒绝入队
+                this.metrics.totalDropped++;
+                return false;
+            }
         }
 
         // 乐观递增：在 await 之前预留容量槽位，防止并发 asyncPut 超过 maxSize
@@ -248,15 +256,22 @@ export class AsyncSynapticQueue {
     /**
      * 定时缩容检查：每 10 分钟检查一次，如果队列大小低于基准容量，缩回基准
      */
-    private startShrinkTimer(): void {
+    private startShrinkTimer(intervalMs: number): void {
         if (this.maxSize <= 0) return; // 无上限的队列不需要
         this.shrinkTimer = setInterval(() => {
-            if (this.maxSize > this.baseCapacity && this.metrics.size < this.baseCapacity) {
-                this.maxSize = this.baseCapacity;
-                this.metrics.capacity = this.maxSize;
-                console.log(`[QUEUE ${this.queueId}] 缩容回基准容量 ${this.maxSize}`);
-            }
-        }, 10 * 60 * 1000).unref();
+            this.checkShrink();
+        }, intervalMs).unref();
+    }
+
+    /**
+     * 内部缩容逻辑
+     */
+    private checkShrink(): void {
+        if (this.maxSize > this.baseCapacity && this.metrics.size < this.baseCapacity) {
+            this.maxSize = this.baseCapacity;
+            this.metrics.capacity = this.maxSize;
+            console.log(`[QUEUE ${this.queueId}] 缩容回基准容量 ${this.maxSize}`);
+        }
     }
 
     /**

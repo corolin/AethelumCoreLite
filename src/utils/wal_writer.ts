@@ -65,7 +65,8 @@ export class WALPtrTracker {
 
     private async writeLsn(lsn: number): Promise<void> {
         // 利用 Node fs 原子重命名写入模拟 mmap 快照
-        const tmpPath = `${this.ptrPath}.tmp`;
+        // 使用唯一临时文件名避免并发实例间的 rename 竞态
+        const tmpPath = `${this.ptrPath}.${crypto.randomBytes(4).toString('hex')}.tmp`;
         await fs.promises.writeFile(tmpPath, lsn.toString(), 'utf8');
         await fs.promises.rename(tmpPath, this.ptrPath);
     }
@@ -105,7 +106,7 @@ export class ImprovedWALWriter {
 
     constructor(queueId: string, walDir: string = "wal_data_v2", enableWal: boolean = true, maxSegmentSize: number = 100 * 1024 * 1024) {
         this.queueId = queueId;
-        this.walDir = path.join(process.cwd(), walDir, queueId);
+        this.walDir = path.resolve(process.cwd(), walDir, queueId);
         this.enableWal = enableWal;
         this.maxSegmentSize = maxSegmentSize;
     }

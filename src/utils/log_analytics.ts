@@ -122,6 +122,9 @@ export class LogAggregator {
             by_logger
         };
     }
+    public close() {
+        this.db.close();
+    }
 }
 
 let globalAggregator: LogAggregator | null = null;
