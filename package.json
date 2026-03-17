@@ -2,13 +2,26 @@
   "name": "aethelum-core-lite",
   "version": "1.0.0",
   "description": "Aethelum 数字心智系统核心库 (Bun 运行时)",
+  "files": [
+    "dist"
+  ],
   "exports": {
-    "./core": "./src/core/index.ts",
-    "./utils": "./src/utils/index.ts",
-    "./api": "./src/api/index.ts",
-    "./config": "./src/config/index.ts",
-    "./prompts": "./src/prompts/index.ts",
-    "./hooks": "./src/hooks/index.ts"
+    "./core": "./dist/core/index.js",
+    "./utils": "./dist/utils/index.js",
+    "./api": "./dist/api/index.js",
+    "./config": "./dist/config/index.js",
+    "./prompts": "./dist/prompts/index.js",
+    "./hooks": "./dist/hooks/index.js"
+  },
+  "typesVersions": {
+    "*": {
+      "core": ["dist/core/index.d.ts"],
+      "utils": ["dist/utils/index.d.ts"],
+      "api": ["dist/api/index.d.ts"],
+      "config": ["dist/config/index.d.ts"],
+      "prompts": ["dist/prompts/index.d.ts"],
+      "hooks": ["dist/hooks/index.d.ts"]
+    }
   },
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
