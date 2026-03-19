@@ -45,8 +45,8 @@ describe("WAL Utilities - Unit Tests", () => {
             const writer2 = new ImprovedWALWriter("test_q", walDir, true, 1024);
             const recovered = await writer2.start();
             expect(recovered.length).toBe(1);
-            expect(recovered[0].lsn).toBe(1);
-            expect(JSON.parse(recovered[0].payload).data).toBe("hello");
+            expect(recovered[0]!.lsn).toBe(1);
+            expect(JSON.parse(recovered[0]!.payload).data).toBe("hello");
             
             // Now commit the LSN
             writer2.writeLog2("msg1", 1);

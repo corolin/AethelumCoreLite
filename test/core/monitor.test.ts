@@ -32,7 +32,7 @@ describe("AsyncWorkerMonitor - Unit Tests", () => {
     test("registerWorker() initializes metrics", () => {
         const metrics = monitor.getGlobalMetrics();
         expect(metrics["TestWorker"]).toBeDefined();
-        expect(metrics["TestWorker"].healthScore).toBe(100);
+        expect(metrics["TestWorker"]!.healthScore).toBe(100);
     });
 
     test("Health check detects errors and triggers circuit breaker", async () => {
@@ -49,7 +49,7 @@ describe("AsyncWorkerMonitor - Unit Tests", () => {
         
         expect(worker.state as any).toBe(WorkerState.ERROR);
         const metrics = monitor.getGlobalMetrics();
-        expect(metrics["TestWorker"].healthScore).toBeLessThan(100);
+        expect(metrics["TestWorker"]!.healthScore).toBeLessThan(100);
         
         errorSpy.mockRestore();
     });
@@ -105,7 +105,7 @@ describe("AsyncWorkerMonitor - Unit Tests", () => {
         await new Promise(r => setTimeout(r, 100));
         
         const metrics = monitor.getGlobalMetrics();
-        expect(metrics["TestWorker"].isTimedOut).toBe(true);
+        expect(metrics["TestWorker"]!.isTimedOut).toBe(true);
         expect(monitor.hasTimedOutWorkers()).toBe(true);
         expect(monitor.getTimedOutWorkers()).toContain("TestWorker");
     });

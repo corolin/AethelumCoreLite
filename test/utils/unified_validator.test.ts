@@ -93,7 +93,7 @@ describe("UnifiedValidator - Unit Tests", () => {
         validator.addRule("field", req);
         
         const results = await validator.validate({ field: null });
-        expect(results[0].status).toBe(ValidationStatus.SKIPPED);
+        expect(results[0]!.status).toBe(ValidationStatus.SKIPPED);
     });
 
     test("Halt on first error in same field", async () => {
@@ -104,7 +104,7 @@ describe("UnifiedValidator - Unit Tests", () => {
         // If first fails with ERROR severity, second should not run
         const results = await validator.validate({ f: "" });
         expect(results.length).toBe(1); // Only RequiredValidator ran
-        expect(results[0].status).toBe(ValidationStatus.FAILED);
+        expect(results[0]!.status).toBe(ValidationStatus.FAILED);
     });
 
     test("ValidationResult isSuccess/isFailure", () => {

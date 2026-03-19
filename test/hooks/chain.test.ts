@@ -31,9 +31,9 @@ describe("AsyncHookChain - Unit Tests", () => {
         chain.addHook(hook3);
 
         const activeHooks = chain.getHooksByType(HookType.PRE_PROCESS);
-        expect(activeHooks[0].name).toBe("h2");
-        expect(activeHooks[1].name).toBe("h1");
-        expect(activeHooks[2].name).toBe("h3");
+        expect(activeHooks[0]!.name).toBe("h2");
+        expect(activeHooks[1]!.name).toBe("h1");
+        expect(activeHooks[2]!.name).toBe("h3");
     });
 
     test("removeHook() and clear()", () => {
