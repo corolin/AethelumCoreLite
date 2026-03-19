@@ -40,7 +40,7 @@ describe("Logger Utilities - Unit Tests", () => {
         const logger = new StructuredLogger("context_test", LogLevel.INFO, []);
         logger.setDefaultContext({ service: "auth" });
         
-        const logSpy = spyOn(logger as any, "log").mockImplementation((_l, _m, kwargs) => {
+        const logSpy = spyOn(logger as any, "log").mockImplementation((_l: any, _m: any, kwargs: any) => {
              // Directly check kwargs in the implementation or verify entry in a more complex setup
              // For simplicity, we just check that setDefaultContext was callable
         });
