@@ -10,7 +10,7 @@
     "target": "es2022",
     "types": [
       "node",
-      "bun-types"
+      "bun"
     ],
     // For nodejs:
     "lib": [

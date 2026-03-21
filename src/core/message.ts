@@ -21,14 +21,38 @@ export enum MessageStatus {
 
 export interface NeuralImpulseOptions {
   sessionId?: string;
+  /** 路由意图 / 目标队列标识 */
   actionIntent: string;
+  /** 当前处理该脉冲的逻辑 Agent 名 */
   sourceAgent?: string;
+  /** 外部输入来源标签（如 API、CLI） */
   inputSource?: string;
   content?: any;
+  /** 扩展元数据（含 wal_lsn、current_queue 等运行时字段） */
   metadata?: Record<string, any>;
   priority?: MessagePriority;
+  /** 绝对过期时间（Unix 毫秒） */
   expiresAt?: number;
   messageId?: string;
+  /**
+   * 生命周期状态。`fromDict`/WAL 恢复时传入，避免被构造函数重置为 `CREATED`。
+   */
+  status?: MessageStatus;
+  /**
+   * 已走过的 Agent 链（调试用）。未传时默认为 `[sourceAgent]`。
+   */
+  routingHistory?: string[];
+  /**
+   * 创建/序列化时间戳（毫秒）。恢复时传入以保持与 `toDict` 一致。
+   */
+  timestamp?: number;
+}
+
+/** 从序列化值安全还原 MessageStatus（未知值回退为 CREATED） */
+function coerceMessageStatus(value: unknown): MessageStatus | undefined {
+  if (typeof value !== 'string') return undefined;
+  const allowed = Object.values(MessageStatus) as string[];
+  return allowed.includes(value) ? (value as MessageStatus) : undefined;
 }
 
 /**
@@ -61,9 +85,12 @@ export class NeuralImpulse {
     this.priority = options.priority !== undefined ? options.priority : MessagePriority.NORMAL;
     this.expiresAt = options.expiresAt;
 
-    this.status = MessageStatus.CREATED;
-    this.timestamp = Date.now();
-    this.routingHistory = [this.sourceAgent];
+    this.status = options.status !== undefined ? options.status : MessageStatus.CREATED;
+    this.timestamp = options.timestamp !== undefined ? options.timestamp : Date.now();
+    this.routingHistory =
+      Array.isArray(options.routingHistory) && options.routingHistory.length > 0
+        ? [...options.routingHistory]
+        : [this.sourceAgent];
   }
 
   /**
@@ -110,6 +137,7 @@ export class NeuralImpulse {
    * 从纯对象结构还原（用于 WAL 崩溃恢复）
    */
   public static fromDict(dict: Record<string, any>): NeuralImpulse {
+    const status = coerceMessageStatus(dict.status);
     return new NeuralImpulse({
       messageId: dict.messageId,
       sessionId: dict.sessionId,
@@ -120,6 +148,9 @@ export class NeuralImpulse {
       metadata: dict.metadata,
       priority: dict.priority,
       expiresAt: dict.expiresAt,
+      ...(status !== undefined ? { status } : {}),
+      ...(Array.isArray(dict.routingHistory) ? { routingHistory: dict.routingHistory as string[] } : {}),
+      ...(typeof dict.timestamp === 'number' ? { timestamp: dict.timestamp } : {}),
     });
   }
 

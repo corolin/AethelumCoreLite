@@ -3,6 +3,27 @@ import { AsyncAxonWorker } from './worker.js';
 import { NeuralImpulse, MessageStatus } from './message.js';
 import { AsyncWorkerMonitor } from './monitor.js';
 import { AsyncErrorHandler } from './error_handler.js';
+import { getStructuredLogger } from '../utils/structured_logger.js';
+
+const routerLogger = getStructuredLogger('CoreLiteRouter');
+
+/**
+ * 路由层日志统一走 {@link routerLogger}（结构化，便于聚合）；`globalThis.logRaw` 为可选旁路。
+ * 本模块不使用 `console.*`，避免与结构化管道混用。
+ */
+function emitRouterLog(
+    level: 'info' | 'warning',
+    message: string,
+    metadata: Record<string, unknown>,
+    rawLine?: string,
+): void {
+    if (level === 'warning') {
+        routerLogger.warning(message, { metadata });
+    } else {
+        routerLogger.info(message, { metadata });
+    }
+    globalThis.logRaw?.(rawLine ?? message);
+}
 
 export class CoreLiteRouter {
     private queues: Map<string, AsyncSynapticQueue> = new Map();
@@ -74,7 +95,10 @@ export class CoreLiteRouter {
         if (this.isActive) return;
         this.isActive = true;
 
-        console.log(`[Router] 正在激活 ${this.workers.size} 个工作器...`);
+        emitRouterLog('info', `[Router] 正在激活 ${this.workers.size} 个工作器...`, {
+            event: 'router.activate',
+            workerCount: this.workers.size,
+        });
         for (const worker of this.workers.values()) {
             worker.start();
         }
@@ -93,17 +117,31 @@ export class CoreLiteRouter {
         // 停止监控守护程序
         this.monitor.stop();
 
-        console.log(`[Router] 正在停止 ${this.workers.size} 个工作器...`);
+        emitRouterLog('info', `[Router] 正在停止 ${this.workers.size} 个工作器...`, {
+            event: 'router.stop',
+            phase: 'workers',
+            workerCount: this.workers.size,
+        });
         const stopPromises = Array.from(this.workers.values()).map(w => w.stop());
         await Promise.all(stopPromises);
 
-        console.log('[Router] 所有工作器已停止。');
+        emitRouterLog('info', '[Router] 所有工作器已停止。', {
+            event: 'router.stop',
+            phase: 'workers_done',
+        });
 
         // 停止所有队列以 flush WAL 日志
-        console.log(`[Router] 正在停止 ${this.queues.size} 个队列...`);
+        emitRouterLog('info', `[Router] 正在停止 ${this.queues.size} 个队列...`, {
+            event: 'router.stop',
+            phase: 'queues',
+            queueCount: this.queues.size,
+        });
         const queueStopPromises = Array.from(this.queues.values()).map(q => q.stop());
         await Promise.all(queueStopPromises);
-        console.log('[Router] 所有队列已停止，WAL 已 flush。');
+        emitRouterLog('info', '[Router] 所有队列已停止，WAL 已 flush。', {
+            event: 'router.stop',
+            phase: 'complete',
+        });
     }
 
     /**
@@ -117,11 +155,15 @@ export class CoreLiteRouter {
 
     /**
      * 核心路由逻辑
-     * 成功移交后对来源队列写 Log2（确认消息已安全离开来源队列）
+     * 成功移交后对来源队列写 WAL tombstone（confirmDelivery，确认消息已安全离开来源队列）
      */
     public async routeMessage(impulse: NeuralImpulse, targetQueueId: string): Promise<boolean> {
         if (!this.isActive) {
-            console.warn(`[Router] 系统未激活，拒绝路由消息 ${impulse.messageId}`);
+            emitRouterLog('warning', `[Router] 系统未激活，拒绝路由消息 ${impulse.messageId}`, {
+                event: 'router.route',
+                rejected: true,
+                messageId: impulse.messageId,
+            });
             return false;
         }
 
@@ -131,8 +173,13 @@ export class CoreLiteRouter {
         const sourceAgent = impulse.sourceAgent || 'Unknown';
         const prevQueue = impulse.metadata['current_queue'] || 'External';
         const routeMsg = `🔀 [ROUTE] ${impulse.sessionId} | ${sourceAgent} → ${targetQueueId} | from: ${prevQueue}`;
-        console.log(routeMsg);
-        globalThis.logRaw?.(routeMsg);
+        emitRouterLog('info', routeMsg, {
+            event: 'route',
+            sessionId: impulse.sessionId,
+            sourceAgent,
+            targetQueue: targetQueueId,
+            fromQueue: prevQueue,
+        });
 
         // 更新当前队列位置
         impulse.metadata['current_queue'] = targetQueueId;
@@ -142,8 +189,10 @@ export class CoreLiteRouter {
         if (targetQueueId === 'Q_RESPONSE_SINK') {
             if (!AsyncAxonWorker.isSinkAccessAllowed(impulse.sourceAgent)) {
                 const securityMsg = `[ROUTER SECURITY] 尝试直达 SINK 被拦截: source=${impulse.sourceAgent}`;
-                console.warn(securityMsg);
-                globalThis.logRaw?.(securityMsg);
+                emitRouterLog('warning', securityMsg, {
+                    event: 'router.security',
+                    sourceAgent: impulse.sourceAgent,
+                });
                 targetQueueId = 'Q_ERROR';
                 impulse.metadata['routing_error'] = 'Security violation: Direct access to SINK';
             }
@@ -162,23 +211,37 @@ export class CoreLiteRouter {
         if (!queue) {
             // 动态创建队列（支持插件形式的临时 Agent 通信）
             // 注意：频繁动态创建可能表示 actionIntent 配置有误，请检查
-            console.warn(`[QUEUE] 动态创建新队列: ${targetQueueId} (session: ${impulse.sessionId}, source: ${impulse.sourceAgent})`);
-            globalThis.logRaw?.(`[QUEUE] 动态创建新队列: ${targetQueueId}`);
+            emitRouterLog(
+                'warning',
+                `[QUEUE] 动态创建新队列: ${targetQueueId} (session: ${impulse.sessionId}, source: ${impulse.sourceAgent})`,
+                {
+                    event: 'router.dynamic_queue',
+                    targetQueueId,
+                    sessionId: impulse.sessionId,
+                    sourceAgent: impulse.sourceAgent,
+                },
+                `[QUEUE] 动态创建新队列: ${targetQueueId}`,
+            );
             queue = new AsyncSynapticQueue(targetQueueId, 1000, this.enableWal);
             this.queues.set(targetQueueId, queue);
         }
 
         const result = await queue.asyncPut(impulse);
 
-        // 移交成功：对来源队列写 Log2（确认消息已安全离开来源队列）
+        // 移交成功：对来源队列 confirmDelivery（WAL tombstone）
         if (result) {
             const srcQueueId = impulse.metadata['_src_queue_id'];
             if (srcQueueId) {
                 const srcQueue = this.queues.get(srcQueueId);
                 if (srcQueue) {
-                    srcQueue.confirmDelivery(impulse);
+                    // 使用 _src_wal_lsn 而非 wal_lsn：
+                    // asyncPut 已将 wal_lsn 覆盖为目标队列的 LSN，
+                    // 必须使用进入目标队列之前保存的来源队列 LSN
+                    const srcLsn = impulse.metadata['_src_wal_lsn'] as number | undefined;
+                    srcQueue.confirmDelivery(impulse, srcLsn);
                 }
-                delete impulse.metadata['_src_queue_id']; // 清理临时标记
+                delete impulse.metadata['_src_queue_id'];
+                delete impulse.metadata['_src_wal_lsn']; // 清理临时标记
             }
         }
 

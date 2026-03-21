@@ -1,3 +1,11 @@
+/**
+ * WAL 写入语义说明
+ *
+ * - **writeDelete（tombstone）**：异步排队落盘（best-effort）。进程在 tombstone 持久化前崩溃时，
+ *   该条 Log1 可能在下次启动被再次恢复并投递（at-least-once 语义下的重复），非数据丢失。
+ * - **优雅退出**：`stop()` 会排空写入互斥队列，尽量让 pending 的 tombstone 落盘；仍不保证内核/磁盘缓存已刷盘。
+ * - **scanUncommitted 段压缩**：仅在 `start()` 内同步执行；当前设计无并发段旋转与扫描的竞争。
+ */
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
@@ -178,6 +186,9 @@ export class ImprovedWALWriter {
 
     /**
      * 确认移交成功：更新 LSN 位点（防抖 500ms 批量提交）
+     *
+     * @deprecated 新路径请用 {@link writeDelete}（按 LSN 精确 tombstone）。本方法保留用于：
+     * 旧版 `tracker.ptr` 单调位点语义、既有测试与外部调用，避免破坏向后兼容。
      */
     public writeLog2(messageId: string, lsn?: number): void {
         if (!this.enableWal || lsn === undefined || lsn === null) return;
@@ -198,6 +209,26 @@ export class ImprovedWALWriter {
         }
     }
 
+    /**
+     * 删除 WAL 记录：消息移交/过期后，向 WAL 写入 tombstone 标记
+     * 格式: DEL|{lsn}
+     * 崩溃恢复时被标记的记录不会重放；旧段文件在全量删除后会被自动清理
+     *
+     * **Best-effort**：通过互斥队列异步 `appendFile`，不阻塞调用方。若在 tombstone 落盘前进程崩溃，
+     * 重启后对应 Log1 可能再次被恢复（与 at-least-once 一致）。需要更强持久化时需配合 `stop()` 排空或 OS/fsync 策略。
+     */
+    public writeDelete(lsn: number): void {
+        if (!this.enableWal || !this.lsnAllocator) return;
+
+        // 异步写入，不阻塞调用方；使用 writeMutex 避免与 Log1 并发写入交叉
+        this.writeMutex.runExclusive(async () => {
+            const record = `DEL|${lsn}\n`;
+            await fs.promises.appendFile(this.currentSegmentPath, record, 'utf8');
+        }).catch(err => {
+            console.error(`[WAL Writer ${this.queueId}] 写入删除标记失败 LSN ${lsn}:`, err);
+        });
+    }
+
     public async stop(): Promise<void> {
         if (!this.enableWal) return;
         // Flush any pending commit before stopping
@@ -210,35 +241,88 @@ export class ImprovedWALWriter {
                 console.error(`[WAL Writer ${this.queueId}] 停止时提交位点失败:`, err);
             }
         }
+        // 排空互斥队列，使 pending 的 writeDelete / writeLog1 尽量完成后再停机（仍非 fsync 级保证）
+        try {
+            await this.writeMutex.runExclusive(async () => {});
+        } catch (err) {
+            console.error(`[WAL Writer ${this.queueId}] 停止时排空写入队列失败:`, err);
+        }
         this.ptrTracker?.stop();
     }
 
     // ============== 崩溃恢复扫描 ==============
 
     /**
-     * 扫描所有 WAL 段文件中未提交的条目（lsn > committedLsn）
+     * 扫描所有 WAL 段文件中未提交的条目
+     *
+     * 两阶段处理：
+     * 1. 收集所有 Log1 条目与 DEL tombstone；
+     * 2. 过滤掉 tombstone 标记的条目，同时删除已全量处理的旧段文件。
+     *
+     * ptrTracker 的 committedLsn 作为快速前向跳过的辅助优化（向后兼容），
+     * tombstone 机制是精确的逐条删除依据，可正确处理乱序移交场景。
      */
     private async scanUncommitted(): Promise<WALRecoveredEntry[]> {
         const committedLsn = this.ptrTracker.getCommittedLsn();
-        const entries: WALRecoveredEntry[] = [];
+
+        // segEntries[seg] = 该段的所有 Log1 条目
+        const segEntries = new Map<number, WALRecoveredEntry[]>();
+        // 所有已标记删除的 LSN（来自任意段的 DEL 记录）
+        const deletedLsns = new Set<number>();
 
         for (let seg = 0; seg <= this.currentSegmentNum; seg++) {
             const segPath = path.join(this.walDir, `log1_${seg.toString().padStart(6, '0')}.wal`);
+            const entries: WALRecoveredEntry[] = [];
             try {
                 const content = await fs.promises.readFile(segPath, 'utf8');
                 for (const line of content.split('\n')) {
                     if (!line) continue;
-                    const entry = this.parseRecord(line);
-                    if (entry && entry.lsn > committedLsn) {
-                        entries.push(entry);
+                    if (line.startsWith('DEL|')) {
+                        // tombstone 记录：DEL|{lsn}
+                        const delLsn = parseInt(line.substring(4), 10);
+                        if (!isNaN(delLsn)) deletedLsns.add(delLsn);
+                    } else {
+                        const entry = this.parseRecord(line);
+                        // committedLsn 快速跳过旧条目（向后兼容优化）
+                        if (entry && entry.lsn > committedLsn) {
+                            entries.push(entry);
+                        }
                     }
                 }
             } catch {
                 // 段文件不存在则跳过
             }
+            segEntries.set(seg, entries);
         }
 
-        return entries;
+        // 压缩：删除非当前段中所有 Log1 条目均已被 tombstone 的旧段文件
+        // 边界说明：本方法仅在 start() 中单次调用；段旋转只发生在运行期 writeLog1/writeDelete，
+        // 与启动期扫描无并发，故不会出现「扫描中途新段被创建却被误删」的竞态。若未来改为后台压缩，需加锁或快照段列表。
+        for (const [seg, entries] of segEntries.entries()) {
+            if (seg === this.currentSegmentNum) continue;
+            const allDeleted = entries.length === 0 || entries.every(e => deletedLsns.has(e.lsn));
+            if (allDeleted) {
+                const segPath = path.join(this.walDir, `log1_${seg.toString().padStart(6, '0')}.wal`);
+                try {
+                    await fs.promises.unlink(segPath);
+                    console.log(`[WAL Writer ${this.queueId}] 段文件已压缩清理: seg ${seg}`);
+                } catch {
+                    // 文件已被其他进程清理，忽略
+                }
+            }
+        }
+
+        // 收集所有未被 tombstone 标记的待恢复条目
+        const uncommitted: WALRecoveredEntry[] = [];
+        for (const entries of segEntries.values()) {
+            for (const entry of entries) {
+                if (!deletedLsns.has(entry.lsn)) {
+                    uncommitted.push(entry);
+                }
+            }
+        }
+
+        return uncommitted;
     }
 
     /**

@@ -60,7 +60,8 @@ export class AsyncWorkerMonitor {
         this.metrics.set(id, {
             workerId: id,
             state: worker.state,
-            processedCount: 0, // 目前无法直接穿透进 Worker 读取私有，需要 Worker 暴露或注入，先给壳
+            // 与 Worker 当前计数对齐；checkHealth 每轮仍会同步 worker.getProcessedCount()
+            processedCount: worker.getProcessedCount(),
             errorCount: 0,
             lastActiveTime: Date.now(),
             healthScore: 100,

@@ -9,6 +9,9 @@ export enum HookType {
     FILTER = 'filter'
 }
 
+/**
+ * Hook 执行结果（写入 `NeuralImpulse.metadata['hook_execution_status']` 等，供监控与扩展使用）
+ */
 export enum HookExecutionStatus {
     SUCCESS = 'success',
     FAILED = 'failed',

@@ -32,7 +32,7 @@ describe("WAL Utilities - Unit Tests", () => {
         }
     });
 
-    test("ImprovedWALWriter write and recovery", async () => {
+    test("ImprovedWALWriter write and recovery (ptrTracker path)", async () => {
         const walDir = path.join(os.tmpdir(), `test_wal_${Date.now()}`);
         const writer = new ImprovedWALWriter("test_q", walDir, true, 1024);
         
@@ -48,15 +48,79 @@ describe("WAL Utilities - Unit Tests", () => {
             expect(recovered[0]!.lsn).toBe(1);
             expect(JSON.parse(recovered[0]!.payload).data).toBe("hello");
             
-            // Now commit the LSN
+            // Commit via legacy writeLog2 (ptrTracker path)
             writer2.writeLog2("msg1", 1);
-            // Wait for debounce or force stop
             await writer2.stop();
             
             // Should not recover anything now
             const writer3 = new ImprovedWALWriter("test_q", walDir, true, 1024);
             const recovered2 = await writer3.start();
             expect(recovered2.length).toBe(0);
+        } finally {
+            if (fs.existsSync(walDir)) fs.rmSync(walDir, { recursive: true });
+        }
+    });
+
+    test("writeDelete: tombstone 标记后不应再恢复该消息", async () => {
+        const walDir = path.join(os.tmpdir(), `test_wal_del_${Date.now()}`);
+        const writer = new ImprovedWALWriter("test_q", walDir, true, 1024 * 1024);
+
+        try {
+            await writer.start();
+            const lsn1 = await writer.writeLog1("msg1", 1, { data: "alpha" });
+            const lsn2 = await writer.writeLog1("msg2", 2, { data: "beta" });
+            expect(lsn1).toBe(1);
+            expect(lsn2).toBe(2);
+
+            // 仅删除 msg1，msg2 保留（模拟乱序移交场景）
+            writer.writeDelete(lsn1!);
+            // 等待异步写入完成
+            await new Promise(r => setTimeout(r, 50));
+            await writer.stop();
+
+            // 崩溃恢复：只应恢复 msg2
+            const writer2 = new ImprovedWALWriter("test_q", walDir, true, 1024 * 1024);
+            const recovered = await writer2.start();
+            expect(recovered.length).toBe(1);
+            expect(recovered[0]!.lsn).toBe(lsn2);
+            expect(JSON.parse(recovered[0]!.payload).data).toBe("beta");
+            await writer2.stop();
+        } finally {
+            if (fs.existsSync(walDir)) fs.rmSync(walDir, { recursive: true });
+        }
+    });
+
+    test("writeDelete: 旧段文件全量 tombstone 后应被压缩清理", async () => {
+        const walDir = path.join(os.tmpdir(), `test_wal_compact_${Date.now()}`);
+        // 极小段大小，强制产生多个段文件
+        const writer = new ImprovedWALWriter("test_q", walDir, true, 100);
+
+        try {
+            await writer.start();
+            const lsn1 = await writer.writeLog1("msg1", 1, { long: "A".repeat(80) });
+            const lsn2 = await writer.writeLog1("msg2", 1, { long: "B".repeat(80) });
+
+            const qDir = path.join(walDir, "test_q");
+            // msg1/msg2 各自撑满一个段，至少存在 seg 0 和 seg 1
+            const seg0Path = path.join(qDir, "log1_000000.wal");
+            expect(fs.existsSync(seg0Path)).toBe(true);
+
+            // 删除 seg 0 中的 msg1，使 seg 0 全量 tombstone
+            writer.writeDelete(lsn1!);
+            await new Promise(r => setTimeout(r, 50));
+            await writer.stop();
+
+            // 重新启动触发压缩：seg 0 应被删除
+            const writer2 = new ImprovedWALWriter("test_q", walDir, true, 100);
+            const recovered = await writer2.start();
+
+            // seg 0 应已被压缩清理
+            expect(fs.existsSync(seg0Path)).toBe(false);
+            // msg2 应仍可恢复
+            expect(recovered.length).toBe(1);
+            expect(recovered[0]!.lsn).toBe(lsn2);
+
+            await writer2.stop();
         } finally {
             if (fs.existsSync(walDir)) fs.rmSync(walDir, { recursive: true });
         }
