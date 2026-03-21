@@ -1,5 +1,5 @@
 import { mkdirSync, existsSync, appendFileSync, statSync, renameSync, unlinkSync } from 'fs';
-import { dirname, join, extname, basename } from 'path';
+import { dirname } from 'path';
 
 export enum LogLevel {
     DEBUG = 0,
@@ -22,6 +22,7 @@ export const parseLogLevel = (levelStr: string): LogLevel => {
     return map[levelStr.toUpperCase()] ?? LogLevel.INFO;
 };
 
+/** 与 `getStructuredLogger(name, { format })` 对应；`format: 'plain'` 与 {@link LogFormat.PLAIN} 等价 */
 export enum LogFormat {
     JSON = "json",
     PLAIN = "plain",
@@ -254,7 +255,10 @@ class LoggerManager {
             ));
         }
 
-        const formatter = finalConfig.format === 'plain' ? new PlainFormatter() : new JsonFormatter();
+        const usePlain =
+            finalConfig.format === LogFormat.PLAIN ||
+            finalConfig.format === 'plain';
+        const formatter = usePlain ? new PlainFormatter() : new JsonFormatter();
 
         const logger = new StructuredLogger(
             name,

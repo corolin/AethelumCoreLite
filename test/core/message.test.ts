@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { NeuralImpulse } from "../../src/core/message.js";
+import { NeuralImpulse, MessageStatus } from "../../src/core/message.js";
 import { UnifiedValidator } from "../../src/utils/unified_validator.js";
 
 describe("NeuralImpulse - Unit Tests", () => {
@@ -36,12 +36,18 @@ describe("NeuralImpulse - Unit Tests", () => {
             content: "hello",
             expiresAt: Date.now() + 1000
         });
-        
+        original.status = MessageStatus.QUEUED;
+        original.addToHistory("AgentA");
+        original.addToHistory("AgentB");
+
         const dict = original.toDict();
         const restored = NeuralImpulse.fromDict(dict);
-        
+
         expect(restored.sessionId).toBe("session-123");
         expect(restored.content).toBe("hello");
         expect(restored.expiresAt).toBe(dict.expiresAt);
+        expect(restored.status).toBe(MessageStatus.QUEUED);
+        expect(restored.routingHistory).toEqual(original.routingHistory);
+        expect(restored.timestamp).toBe(original.timestamp);
     });
 });

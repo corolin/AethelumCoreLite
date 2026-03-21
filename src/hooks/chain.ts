@@ -94,6 +94,7 @@ export class AsyncHookChain {
                     currentImpulse.status = MessageStatus.FAILED;
                     currentImpulse.metadata['error_hook'] = hook.name;
                     currentImpulse.metadata['error_message'] = error instanceof Error ? error.message : String(error);
+                    currentImpulse.metadata['hook_execution_status'] = HookExecutionStatus.FAILED;
                 }
 
                 // 把异常抛出，让外层的 Worker 错误处理器接管

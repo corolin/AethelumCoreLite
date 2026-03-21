@@ -1,4 +1,5 @@
 import { NeuralImpulse } from './message.js';
+// WAL：移交/过期用 writeDelete；旧版 writeLog2 仅保留于 ImprovedWALWriter（tracker.ptr 兼容）
 import { ImprovedWALWriter } from '../utils/wal_writer.js';
 import type { WALRecoveredEntry } from '../utils/wal_writer.js';
 
@@ -125,6 +126,10 @@ export class AsyncSynapticQueue {
                 const directMsg = `⚡ [DEQUEUE] ${item.sessionId} | ${this.queueId} → 直接投递给等待消费者`;
                 console.log(directMsg);
                 globalThis.logRaw?.(directMsg);
+                // 直接投递路径也需要记录来源信息，确保 Router 能正确写 Log2
+                // wal_lsn 此时还是本队列的值，必须在 consumer.resolve 前保存
+                item.metadata['_src_queue_id'] = this.queueId;
+                item.metadata['_src_wal_lsn'] = lsn ?? item.metadata['wal_lsn'];
                 consumer.resolve(item);
                 return true;
             }
@@ -161,17 +166,19 @@ export class AsyncSynapticQueue {
                         const expireMsg = `⏰ [DEQUEUE] ${item.sessionId} | ${this.queueId} → 消息已过期，丢弃`;
                         console.log(expireMsg);
                         globalThis.logRaw?.(expireMsg);
-                        // 过期消息直接丢弃，但需对当前队列写 Log2 释放所有权
+                        // 过期消息直接丢弃，写入 tombstone 释放 WAL 所有权
                         // （过期消息不会经过 Router，无法由 confirmDelivery 触发）
-                        if (this.walWriter && item.metadata['wal_lsn']) {
-                            this.walWriter.writeLog2(item.messageId, item.metadata['wal_lsn']);
+                        if (this.walWriter && item.metadata['wal_lsn'] !== undefined) {
+                            this.walWriter.writeDelete(item.metadata['wal_lsn'] as number);
                         }
                         foundExpired = true;
                         break; // 跳出 for 循环，重新从头遍历优先级
                     }
 
-                    // 记录来源队列 ID，供 Router 在移交成功后写 Log2
+                    // 记录来源队列 ID 和当前 LSN，供 Router 在移交成功后写 Log2
+                    // 必须在此处保存 wal_lsn，因为消息进入下一个队列后 wal_lsn 会被覆盖
                     item.metadata['_src_queue_id'] = this.queueId;
+                    item.metadata['_src_wal_lsn'] = item.metadata['wal_lsn'];
 
                     // 消息流动日志：出队
                     const dequeueMsg = `⬆️  [DEQUEUE] ${item.sessionId} | ${this.queueId} → Worker | remaining: ${this.metrics.size}`;
@@ -208,11 +215,28 @@ export class AsyncSynapticQueue {
 
     /**
      * 移交成功确认：Router 在消息成功放入目标队列后调用
-     * 对来源队列的 WAL 写入 Log2，确认消息已安全移交
+     * 向来源队列的 WAL 写入 tombstone（DEL 标记），释放消息所有权
+     *
+     * @param item 消息对象
+     * @param explicitLsn 来源队列的 LSN（Router 应传入 `impulse.metadata['_src_wal_lsn']`）
+     *   **禁止**使用 `item.metadata['wal_lsn']` 作为来源 LSN：移交成功后该字段已是**目标队列**的 LSN，
+     *   误用会 tombstone 错误记录。若未传 `explicitLsn`，仅回退到 `item.metadata['_src_wal_lsn']`；
+     *   二者皆缺则跳过并告警（绝不回退到 `wal_lsn`）。
      */
-    public confirmDelivery(item: NeuralImpulse): void {
-        if (this.walWriter && item.metadata['wal_lsn']) {
-            this.walWriter.writeLog2(item.messageId, item.metadata['wal_lsn']);
+    public confirmDelivery(item: NeuralImpulse, explicitLsn?: number): void {
+        const fromMeta = item.metadata['_src_wal_lsn'] as number | undefined;
+        const lsn = explicitLsn !== undefined && explicitLsn !== null ? explicitLsn : fromMeta;
+
+        if (this.walWriter && (lsn === undefined || lsn === null)) {
+            console.warn(
+                `[QUEUE ${this.queueId}] confirmDelivery 跳过：缺少来源 LSN（需 explicitLsn 或 metadata._src_wal_lsn；` +
+                    `勿使用 wal_lsn，移交后已为目标队列 LSN） messageId=${item.messageId}`,
+            );
+            return;
+        }
+
+        if (this.walWriter && lsn !== undefined && lsn !== null) {
+            this.walWriter.writeDelete(lsn as number);
         }
     }
 
