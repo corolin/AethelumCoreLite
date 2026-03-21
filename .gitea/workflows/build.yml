@@ -19,6 +19,7 @@ jobs:
     runs-on: ubuntu-latest
     container:
       image: oven/bun:latest
+      options: --network host
     steps:
       - name: Install git (for actions/checkout on Gitea)
         run: |
