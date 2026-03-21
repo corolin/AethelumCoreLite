@@ -1,3 +1,7 @@
+# Gitea Actions：actions/checkout 需要 PATH 中有 git。
+# oven/bun 镜像默认无 git → checkout 会误走 GitHub tarball API → getaddrinfo ENOTFOUND。
+# 方案 A：本文件采用「oven/bun 容器 + 首步 apt 安装 git」。
+# 方案 B：不用容器，runs-on ubuntu-latest + setup-bun（少一次 apt，见历史提交）。
 name: Build & Publish
 
 on:
@@ -15,15 +19,16 @@ jobs:
     runs-on: ubuntu-latest
     container:
       image: oven/bun:latest
-
     steps:
+      - name: Install git (for actions/checkout on Gitea)
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends git ca-certificates
+
       - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
