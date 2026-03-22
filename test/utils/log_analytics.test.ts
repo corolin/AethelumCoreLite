@@ -43,10 +43,11 @@ describe("LogAggregator - Unit Tests", () => {
         
         const infoLevel = stats.by_level.find((l: any) => l.level === "INFO");
         expect(infoLevel.count).toBe(1);
+    });
 
-        // Coverage for global aggregator getter
-        const { getLogAggregator } = require("../../src/utils/log_analytics.js");
-        expect(getLogAggregator()).toBeDefined();
+    test("getLogAggregator 已导出（不调用以免打开默认库文件与 :memory: 冲突）", async () => {
+        const { getLogAggregator } = await import("../../src/utils/log_analytics.js");
+        expect(typeof getLogAggregator).toBe("function");
     });
 
     test("TimeWindow filtering", () => {
