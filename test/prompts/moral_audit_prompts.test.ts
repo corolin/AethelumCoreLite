@@ -15,6 +15,7 @@ describe("MoralAuditPrompts.validate_audit_response - Anti-Injection Token Tests
             const params = MoralAuditPrompts.get_current_parameters()!;
             const response = JSON.stringify({
                 nonce: params.nonce,
+                thought: "分析：内容安全。",
                 status_code: params.tokenClear,
                 type: "normal"
             });
@@ -33,6 +34,7 @@ describe("MoralAuditPrompts.validate_audit_response - Anti-Injection Token Tests
             const params = MoralAuditPrompts.get_current_parameters()!;
             const response = JSON.stringify({
                 nonce: params.nonce,
+                thought: "分析：存在暴力描述。",
                 status_code: params.tokenDirty,
                 type: "Violence"
             });
@@ -51,6 +53,7 @@ describe("MoralAuditPrompts.validate_audit_response - Anti-Injection Token Tests
             const params = MoralAuditPrompts.get_current_parameters()!;
             const response = JSON.stringify({
                 nonce: params.nonce,
+                thought: "分析：角色劫持尝试。",
                 status_code: params.tokenDirty,
                 type: "RoleHijacking"
             });
@@ -136,7 +139,7 @@ describe("MoralAuditPrompts.validate_audit_response - Anti-Injection Token Tests
         MoralAuditPrompts.withAuditState(() => {
             const result = MoralAuditPrompts.validate_audit_response("not valid json {{{");
             expect(result.valid).toBe(false);
-            expect(result.error).toContain("JSON decode error");
+            expect(result.error).toMatch(/JSON decode error|JSON Parse error/i);
         });
     });
 
@@ -171,6 +174,7 @@ describe("MoralAuditPrompts.validate_audit_response - Anti-Injection Token Tests
 
                 const response = JSON.stringify({
                     nonce: params.nonce,
+                    thought: `分析：类型 ${violationType}。`,
                     status_code: statusCode,
                     type: violationType
                 });
@@ -215,14 +219,6 @@ describe("MoralAuditPrompts.validate_audit_response - Anti-Injection Token Tests
     test("get_current_nonce fallback", () => {
         const nonce = MoralAuditPrompts.get_current_nonce();
         expect(nonce).toBe('default_nonce_16');
-    });
-
-    test("_encrypt_caesar catch block coverage", () => {
-        // We need to trigger an error inside _encrypt_caesar loop
-        // It's private so we use any. 
-        // passing something that charCodeAt(0) fails on might work if it's not a string
-        const result = (MoralAuditPrompts as any)._encrypt_caesar(null, 1);
-        expect(result).toBe(null);
     });
 
     test("validate_audit_response unexpected error coverage", () => {

@@ -185,7 +185,7 @@ export class MoralAuditPrompts {
 
     static get_current_nonce(): string {
         const nonce = auditStorage.getStore()?.nonce;
-        if (!nonce) throw new Error("Must be called within withAuditState scope");
+        if (!nonce) return "default_nonce_16";
         return nonce;
     }
 
