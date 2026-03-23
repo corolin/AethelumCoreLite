@@ -34,7 +34,7 @@ jobs:
       # --- dev 分支: 发布为 next (pre-release) ---
       - name: Bump prerelease version
         if: gitea.ref == 'refs/heads/dev' && gitea.event_name == 'push'
-        run: bun version prerelease --preid dev
+        run: npm version prerelease --preid dev --no-git-tag-version
 
       - name: Publish prerelease (next)
         if: gitea.ref == 'refs/heads/dev' && gitea.event_name == 'push'
