@@ -40,7 +40,7 @@ jobs:
         if: gitea.ref == 'refs/heads/dev' && gitea.event_name == 'push'
         run: |
           echo "//git.internal.coro.link/api/packages/${{ gitea.repository_owner }}/npm/:_authToken=${{ secrets.PACKAGE_TOKEN }}" > ~/.npmrc
-          bun publish --access public --no-git-checks --tag next
+          bun publish --tag next --access public --no-git-checks --registry "${{ env.REGISTRY_URL }}"
         env:
           npm_config_registry: "${{ gitea.server_url }}/api/packages/${{ gitea.repository_owner }}/npm"
 
@@ -48,7 +48,7 @@ jobs:
       - name: Publish release (latest)
         if: (gitea.ref == 'refs/heads/main' || startsWith(gitea.ref, 'refs/tags/v')) && gitea.event_name == 'push'
         run: |
-          echo "https://git.internal.coro.link/api/packages/${{ gitea.repository_owner }}/npm/:_authToken=${{ secrets.PACKAGE_TOKEN }}" > ~/.npmrc
-          bun publish --access public --no-git-checks
+          echo "//git.internal.coro.link/api/packages/${{ gitea.repository_owner }}/npm/:_authToken=${{ secrets.PACKAGE_TOKEN }}" > ~/.npmrc
+          bun publish --access public --no-git-checks --registry "${{ env.REGISTRY_URL }}"
         env:
           npm_config_registry: "${{ gitea.server_url }}/api/packages/${{ gitea.repository_owner }}/npm"
