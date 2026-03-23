@@ -39,10 +39,10 @@ jobs:
       - name: Publish prerelease (next)
         if: gitea.ref == 'refs/heads/dev' && gitea.event_name == 'push'
         run: |
-          echo "https://git.internal.coro.link/api/packages/${{ gitea.repository_owner }}/npm/:_authToken=${{ secrets.PACKAGE_TOKEN }}" > ~/.npmrc
+          echo "//git.internal.coro.link/api/packages/${{ gitea.repository_owner }}/npm/:_authToken=${{ secrets.PACKAGE_TOKEN }}" > ~/.npmrc
           bun publish --access public --no-git-checks --tag next
         env:
-          npm_config_registry: "${{ gitea.server_url }}/api/packages/${{ gitea.repository_owner }}/npm/"
+          npm_config_registry: "${{ gitea.server_url }}/api/packages/${{ gitea.repository_owner }}/npm"
 
       # --- main 分支 / tag: 发布为 latest (正式版) ---
       - name: Publish release (latest)
@@ -51,4 +51,4 @@ jobs:
           echo "https://git.internal.coro.link/api/packages/${{ gitea.repository_owner }}/npm/:_authToken=${{ secrets.PACKAGE_TOKEN }}" > ~/.npmrc
           bun publish --access public --no-git-checks
         env:
-          npm_config_registry: "${{ gitea.server_url }}/api/packages/${{ gitea.repository_owner }}/npm/"
+          npm_config_registry: "${{ gitea.server_url }}/api/packages/${{ gitea.repository_owner }}/npm"
