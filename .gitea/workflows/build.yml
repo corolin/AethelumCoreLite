@@ -9,26 +9,18 @@ on:
     branches: [main]
 
 env:
-  REGISTRY_URL: "https://git.internal.coro.link/api/packages/${{ gitea.repository_owner }}/npm"
+  REGISTRY_URL: "${{ gitea.server_url }}/api/packages/${{ gitea.repository_owner }}/npm"
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    container:
+      image: ./.gitea/docker/bun-git.Dockerfile
     steps:
-      - name: Install git (for actions/checkout on Gitea)
-        run: |
-          apt-get update
-          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends git ca-certificates
-
       - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v1
-        with:
-          bun-version: latest
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
