@@ -1,10 +1,7 @@
-# Gitea Actions：actions/checkout 需要 PATH 中有 git。
-# oven/bun 镜像默认无 git → checkout 会误走 GitHub tarball API → getaddrinfo ENOTFOUND。
-# 方案 A：本文件采用「oven/bun 容器 + 首步 apt 安装 git」。
-# 方案 B：不用容器，runs-on ubuntu-latest + setup-bun（少一次 apt，见历史提交）。
 name: Build & Publish
 
 on:
+  workflow_dispatch:
   push:
     branches: [main, dev]
     tags: ["v*"]
