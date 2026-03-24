@@ -40,7 +40,7 @@ jobs:
         if: gitea.ref == 'refs/heads/dev'
         env:
           REGISTRY_DOMAIN="//git.internal.coro.link/api/packages/${{ gitea.repository_owner }}/npm/"
-          NODE_AUTH_TOKEN: ${{ secrets.PACKAGE_TOKEN }}
+          NODE_AUTH_TOKEN="${{ secrets.PACKAGE_TOKEN }}"
         run: |
           # 写入认证信息（确保末尾有斜杠或路径完全一致）
           echo "${REGISTRY_DOMAIN}:_authToken=${{ secrets.PACKAGE_TOKEN }}" > ~/.npmrc
@@ -52,7 +52,7 @@ jobs:
         if: gitea.ref == 'refs/heads/main' || startsWith(gitea.ref, 'refs/tags/v')
         env:
           REGISTRY_DOMAIN="//git.internal.coro.link/api/packages/${{ gitea.repository_owner }}/npm/"
-          NODE_AUTH_TOKEN: ${{ secrets.PACKAGE_TOKEN }}
+          NODE_AUTH_TOKEN="${{ secrets.PACKAGE_TOKEN }}"
         run: |
           # 写入认证信息（确保末尾有斜杠或路径完全一致）
           echo "${REGISTRY_DOMAIN}:_authToken=${{ secrets.PACKAGE_TOKEN }}" > ~/.npmrc
