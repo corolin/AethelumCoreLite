@@ -1,5 +1,5 @@
 {
-  "name": "aethelum-core-lite",
+  "name": "@syrkos/aethelum-core-lite",
   "version": "1.0.0",
   "description": "Aethelum 数字心智系统核心库 (Bun 运行时)",
   "files": [
