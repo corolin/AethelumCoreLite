@@ -36,27 +36,19 @@ jobs:
         if: gitea.ref == 'refs/heads/dev'
         run: npm version prerelease --preid dev --no-git-tag-version
 
-      - name: Debug auth token
-        if: gitea.ref == 'refs/heads/dev'
-        run: |
-          TOKEN="${{ secrets.PACKAGE_TOKEN }}"
-          if [ -z "$TOKEN" ]; then
-            echo "::error::PACKAGE_TOKEN secret is not configured!"
-            exit 1
-          fi
-          echo "PACKAGE_TOKEN is set (length: ${#TOKEN})"
-
       - name: Publish prerelease (next)
         if: gitea.ref == 'refs/heads/dev'
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.PACKAGE_TOKEN }}
         run: |
-          export BUN_AUTH_TOKEN="${{ secrets.PACKAGE_TOKEN }}"
-          echo "//git.internal.coro.link/api/packages/${{ gitea.repository_owner }}/npm/:_authToken=${BUN_AUTH_TOKEN}" > ~/.npmrc
-          bun publish --tag next --access public --no-git-checks --registry "${{ env.REGISTRY_URL }}"
+          echo "//git.internal.coro.link/api/packages/${{ gitea.repository_owner }}/npm/:_authToken=${{ secrets.PACKAGE_TOKEN }}" > ~/.npmrc
+          npm publish --tag next --access public --registry "${{ env.REGISTRY_URL }}"
 
       # --- main 分支 / tag: 发布为 latest (正式版) ---
       - name: Publish release (latest)
         if: gitea.ref == 'refs/heads/main' || startsWith(gitea.ref, 'refs/tags/v')
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.PACKAGE_TOKEN }}
         run: |
-          export BUN_AUTH_TOKEN="${{ secrets.PACKAGE_TOKEN }}"
-          echo "//git.internal.coro.link/api/packages/${{ gitea.repository_owner }}/npm/:_authToken=${BUN_AUTH_TOKEN}" > ~/.npmrc
-          bun publish --access public --no-git-checks --registry "${{ env.REGISTRY_URL }}"
+          echo "//git.internal.coro.link/api/packages/${{ gitea.repository_owner }}/npm/:_authToken=${{ secrets.PACKAGE_TOKEN }}" > ~/.npmrc
+          npm publish --access public --registry "${{ env.REGISTRY_URL }}"
