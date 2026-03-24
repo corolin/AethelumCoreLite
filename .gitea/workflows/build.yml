@@ -36,6 +36,16 @@ jobs:
         if: gitea.ref == 'refs/heads/dev'
         run: npm version prerelease --preid dev --no-git-tag-version
 
+      - name: Debug auth token
+        if: gitea.ref == 'refs/heads/dev'
+        run: |
+          TOKEN="${{ secrets.PACKAGE_TOKEN }}"
+          if [ -z "$TOKEN" ]; then
+            echo "::error::PACKAGE_TOKEN secret is not configured!"
+            exit 1
+          fi
+          echo "PACKAGE_TOKEN is set (length: ${#TOKEN})"
+
       - name: Publish prerelease (next)
         if: gitea.ref == 'refs/heads/dev'
         run: |
