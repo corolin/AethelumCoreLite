@@ -1,26 +1,30 @@
 {
   "name": "@syrkos/aethelum-core-lite",
-  "version": "1.0.1-dev.0",
-  "description": "Aethelum 数字心智系统核心库 (Bun 运行时)",
+  "version": "1.0.1-dev.1",
+  "description": "模拟树神经的异步通信框架 —— 基于生物树神经概念构建的高性能消息处理架构，支持异步队列、Worker 钩子、WAL 持久化与自我优化，适用于 Bun / Node.js 运行时",
   "files": [
     "dist"
   ],
   "exports": {
-    "./core": "./dist/core/index.js",
-    "./utils": "./dist/utils/index.js",
-    "./api": "./dist/api/index.js",
-    "./config": "./dist/config/index.js",
-    "./prompts": "./dist/prompts/index.js",
-    "./hooks": "./dist/hooks/index.js"
+    "./core": "./dist/src/core/index.js",
+    "./core/self-refining": "./dist/src/core/self-refining/index.js",
+    "./utils": "./dist/src/utils/index.js",
+    "./api": "./dist/src/api/index.js",
+    "./config": "./dist/src/config/index.js",
+    "./prompts": "./dist/src/prompts/index.js",
+    "./hooks": "./dist/src/hooks/index.js",
+    "./types": "./dist/src/types/index.js"
   },
   "typesVersions": {
     "*": {
-      "core": ["dist/core/index.d.ts"],
-      "utils": ["dist/utils/index.d.ts"],
-      "api": ["dist/api/index.d.ts"],
-      "config": ["dist/config/index.d.ts"],
-      "prompts": ["dist/prompts/index.d.ts"],
-      "hooks": ["dist/hooks/index.d.ts"]
+      "core": ["dist/src/core/index.d.ts"],
+      "core/self-refining": ["dist/src/core/self-refining/index.d.ts"],
+      "utils": ["dist/src/utils/index.d.ts"],
+      "api": ["dist/src/api/index.d.ts"],
+      "config": ["dist/src/config/index.d.ts"],
+      "prompts": ["dist/src/prompts/index.d.ts"],
+      "hooks": ["dist/src/hooks/index.d.ts"],
+      "types": ["dist/src/types/index.d.ts"]
     }
   },
   "scripts": {
