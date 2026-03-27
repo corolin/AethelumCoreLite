@@ -226,22 +226,29 @@ export class CoreLiteRouter {
             this.queues.set(targetQueueId, queue);
         }
 
+        // 入目标队列前先快照“上一跳来源队列”信息。
+        // 目标队列若走“直接投递给等待消费者”路径，可能会覆写 _src_* 为目标队列自身；
+        // 若不快照，confirmDelivery 可能删错 WAL 或漏删上一跳 WAL。
+        const prevSrcQueueId = impulse.metadata['_src_queue_id'] as string | undefined;
+        const prevSrcLsn = impulse.metadata['_src_wal_lsn'] as number | undefined;
+
         const result = await queue.asyncPut(impulse);
 
         // 移交成功：对来源队列 confirmDelivery（WAL tombstone）
         if (result) {
-            const srcQueueId = impulse.metadata['_src_queue_id'];
-            if (srcQueueId) {
-                const srcQueue = this.queues.get(srcQueueId);
+            if (prevSrcQueueId) {
+                const srcQueue = this.queues.get(prevSrcQueueId);
                 if (srcQueue) {
-                    // 使用 _src_wal_lsn 而非 wal_lsn：
-                    // asyncPut 已将 wal_lsn 覆盖为目标队列的 LSN，
-                    // 必须使用进入目标队列之前保存的来源队列 LSN
-                    const srcLsn = impulse.metadata['_src_wal_lsn'] as number | undefined;
-                    srcQueue.confirmDelivery(impulse, srcLsn);
+                    // 必须使用“入队前快照”的来源位点，避免被目标队列覆盖。
+                    srcQueue.confirmDelivery(impulse, prevSrcLsn);
                 }
-                delete impulse.metadata['_src_queue_id'];
-                delete impulse.metadata['_src_wal_lsn']; // 清理临时标记
+                // 仅清理旧标记；若目标队列已写入新的 _src_*（用于下一跳），不能误删。
+                if (impulse.metadata['_src_queue_id'] === prevSrcQueueId) {
+                    delete impulse.metadata['_src_queue_id'];
+                }
+                if (impulse.metadata['_src_wal_lsn'] === prevSrcLsn) {
+                    delete impulse.metadata['_src_wal_lsn'];
+                }
             }
         }
 
