@@ -283,19 +283,19 @@ export class ImprovedWALWriter {
             clearTimeout(this.compactTimer);
             this.compactTimer = null;
         }
-        // 停止前做一次最终压缩，确保 DEL 已物理生效
+        // ① 先排空互斥队列，确保所有 pending 的 writeDelete 都落盘
+        try {
+            await this.writeMutex.runExclusive(async () => {});
+        } catch (err) {
+            console.error(`[WAL Writer ${this.queueId}] 停止时排空写入队列失败:`, err);
+        }
+        // ② 再做最终压缩（此时所有 DEL 标记已在磁盘上，压缩可以正确移除已删除的 Log1 行）
         try {
             await this.writeMutex.runExclusive(async () => {
                 await this.compactWalSegments();
             });
         } catch (err) {
             console.error(`[WAL Writer ${this.queueId}] 停止时压缩 WAL 失败:`, err);
-        }
-        // 排空互斥队列，使 pending 的 writeDelete / writeLog1 尽量完成后再停机（仍非 fsync 级保证）
-        try {
-            await this.writeMutex.runExclusive(async () => {});
-        } catch (err) {
-            console.error(`[WAL Writer ${this.queueId}] 停止时排空写入队列失败:`, err);
         }
         this.ptrTracker?.stop();
     }
