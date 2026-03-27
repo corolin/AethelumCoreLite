@@ -257,8 +257,12 @@ export class AsyncAxonWorker {
         this.processingStartTime = startTime;
         this.heartbeat();
 
-        // 🔥 重置手动路由标志（每个新消息都需要重新检测）
+        // 🔥 取消手动路由状态（新消息重置）
         this.hasManuallyRouted = false;
+
+        // 🔥 快照当前来源 WAL 参数，用于 finally 中的兜底清理
+        const prevSrcQueueId = impulse.metadata['_src_queue_id'] as string | undefined;
+        const prevSrcWalLsn = impulse.metadata['_src_wal_lsn'] as number | undefined;
 
         // 📊 消息流动日志：开始处理
         const processStartMsg = `⚙️  [PROCESS] ${impulse.sessionId} | ${this.id} 开始处理 | from: ${this.inputQueue.queueId}`;
@@ -344,13 +348,17 @@ export class AsyncAxonWorker {
                 }
             } catch (fatalErr) {
                 console.error(`[Worker ${this.id}] ErrorHook 也发生致命错误:`, fatalErr);
-            } finally {
-                // 确保已经消费完毕的神经脉冲从 WAL 里删去。
-                if (impulse && impulse.metadata && impulse.metadata['_src_wal_lsn'] !== undefined) {
-                    const lsn = impulse.metadata['_src_wal_lsn'];
-                    this.inputQueue.confirmDelivery(impulse, lsn);
-                    delete impulse.metadata['_src_queue_id'];
-                    delete impulse.metadata['_src_wal_lsn'];
+            }
+        } finally {
+            // 🔥 兜底处理：如果消息被丢弃、到达终点站（如 Q_DONE）未路由、或崩溃拦截
+            // 只要它未被 routeMessage 成功写入下一站从而附上 _wal_handled_for_lsn=prevSrcWalLsn，就手动墓碑化
+            if (prevSrcQueueId === this.inputQueue.queueId && prevSrcWalLsn !== undefined) {
+                if (impulse.metadata['_wal_handled_for_lsn'] !== prevSrcWalLsn) {
+                    this.inputQueue.confirmDelivery(impulse, prevSrcWalLsn);
+                }
+                // 清理本次 handled 标记，避免污染下个 Worker 的处理
+                if (impulse.metadata['_wal_handled_for_lsn'] === prevSrcWalLsn) {
+                    delete impulse.metadata['_wal_handled_for_lsn'];
                 }
             }
         }

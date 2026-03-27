@@ -242,6 +242,12 @@ export class CoreLiteRouter {
                     // 必须使用“入队前快照”的来源位点，避免被目标队列覆盖。
                     srcQueue.confirmDelivery(impulse, prevSrcLsn);
                 }
+                
+                // 标记该 LSN 已被路由器安全处理并确认移交，Worker.finally 无需兜底清除
+                if (prevSrcLsn !== undefined) {
+                    impulse.metadata['_wal_handled_for_lsn'] = prevSrcLsn;
+                }
+
                 // 仅清理旧标记；若目标队列已写入新的 _src_*（用于下一跳），不能误删。
                 if (impulse.metadata['_src_queue_id'] === prevSrcQueueId) {
                     delete impulse.metadata['_src_queue_id'];
