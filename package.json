@@ -1,6 +1,6 @@
 {
   "name": "@syrkos/aethelum-core-lite",
-  "version": "1.0.1-dev.2",
+  "version": "1.0.1-dev.3",
   "description": "模拟树神经的异步通信框架 —— 基于生物树神经概念构建的高性能消息处理架构，支持异步队列、Worker 钩子、WAL 持久化与自我优化，适用于 Bun / Node.js 运行时",
   "files": [
     "dist"
@@ -17,14 +17,30 @@
   },
   "typesVersions": {
     "*": {
-      "core": ["dist/src/core/index.d.ts"],
-      "core/self-refining": ["dist/src/core/self-refining/index.d.ts"],
-      "utils": ["dist/src/utils/index.d.ts"],
-      "api": ["dist/src/api/index.d.ts"],
-      "config": ["dist/src/config/index.d.ts"],
-      "prompts": ["dist/src/prompts/index.d.ts"],
-      "hooks": ["dist/src/hooks/index.d.ts"],
-      "types": ["dist/src/types/index.d.ts"]
+      "core": [
+        "dist/src/core/index.d.ts"
+      ],
+      "core/self-refining": [
+        "dist/src/core/self-refining/index.d.ts"
+      ],
+      "utils": [
+        "dist/src/utils/index.d.ts"
+      ],
+      "api": [
+        "dist/src/api/index.d.ts"
+      ],
+      "config": [
+        "dist/src/config/index.d.ts"
+      ],
+      "prompts": [
+        "dist/src/prompts/index.d.ts"
+      ],
+      "hooks": [
+        "dist/src/hooks/index.d.ts"
+      ],
+      "types": [
+        "dist/src/types/index.d.ts"
+      ]
     }
   },
   "scripts": {

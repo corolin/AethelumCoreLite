@@ -50,7 +50,6 @@ export class CoreLiteRouter {
             'Q_AUDITED_INPUT', // 修复 Python 版本遗漏的问题
             'Q_AUDIT_OUTPUT',
             'Q_ERROR',
-            'Q_DONE',
             'Q_REFLECTION' // 后台自我反思队列
         ];
 
@@ -59,6 +58,7 @@ export class CoreLiteRouter {
         }
 
         // 终端队列不需要 WAL（最终归宿，无进一步移交）
+        this.queues.set('Q_DONE', new AsyncSynapticQueue('Q_DONE', 1000, false));
         this.queues.set('Q_RESPONSE_SINK', new AsyncSynapticQueue('Q_RESPONSE_SINK', 1000, false));
     }
 
