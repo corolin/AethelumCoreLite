@@ -344,6 +344,14 @@ export class AsyncAxonWorker {
                 }
             } catch (fatalErr) {
                 console.error(`[Worker ${this.id}] ErrorHook 也发生致命错误:`, fatalErr);
+            } finally {
+                // 确保已经消费完毕的神经脉冲从 WAL 里删去。
+                if (impulse && impulse.metadata && impulse.metadata['_src_wal_lsn'] !== undefined) {
+                    const lsn = impulse.metadata['_src_wal_lsn'];
+                    this.inputQueue.confirmDelivery(impulse, lsn);
+                    delete impulse.metadata['_src_queue_id'];
+                    delete impulse.metadata['_src_wal_lsn'];
+                }
             }
         }
     }
