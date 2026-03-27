@@ -1,6 +1,6 @@
 {
   "name": "@syrkos/aethelum-core-lite",
-  "version": "1.0.1-dev.3",
+  "version": "1.0.1-dev.4",
   "description": "模拟树神经的异步通信框架 —— 基于生物树神经概念构建的高性能消息处理架构，支持异步队列、Worker 钩子、WAL 持久化与自我优化，适用于 Bun / Node.js 运行时",
   "files": [
     "dist"
