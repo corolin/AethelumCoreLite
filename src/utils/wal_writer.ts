@@ -111,6 +111,9 @@ export class ImprovedWALWriter {
     // Log2 批量防抖位点确认
     private lastCommittedLsn: number = 0;
     private commitTimer: NodeJS.Timeout | null = null;
+    // DEL 之后的段压缩防抖：将已删除记录物理移出 WAL 文件
+    private compactTimer: NodeJS.Timeout | null = null;
+    private compactDebounceMs: number = 1000;
 
     constructor(queueId: string, walDir: string = "wal_data_v2", enableWal: boolean = true, maxSegmentSize: number = 100 * 1024 * 1024) {
         this.queueId = queueId;
@@ -137,6 +140,10 @@ export class ImprovedWALWriter {
         if (files.length > 0) {
             const segNums = files.map(f => parseInt(f.split('_')[1]!.split('.')[0]!, 10)).sort((a, b) => a - b);
             this.currentSegmentNum = segNums[segNums.length - 1]!;
+            // 关键修复：不能仅依赖 tracker.ptr（writeLog2 已弃用，ptr 可能长期不前进）
+            // 需要从现存 WAL 段中恢复历史最大 LSN，避免重启后 LSN 回绕复用。
+            const maxLsnFromSegments = await this.scanMaxLsnFromSegments(segNums);
+            maxLsn = Math.max(maxLsn, maxLsnFromSegments);
         } else {
             this.currentSegmentNum = 0;
         }
@@ -151,6 +158,34 @@ export class ImprovedWALWriter {
         console.log(`[WAL Writer ${this.queueId}] 启动成功，当前 LSN: ${this.lsnAllocator!.getCurrentLsn()}，段号: ${this.currentSegmentNum}${recovered.length > 0 ? `，待恢复: ${recovered.length} 条` : ''}`);
 
         return recovered;
+    }
+
+    /**
+     * 从现存段文件中扫描历史最大 LSN。
+     * 仅解析 Log1 记录行（跳过 DEL tombstone 行）。
+     */
+    private async scanMaxLsnFromSegments(segNums: number[]): Promise<number> {
+        let maxLsn = 0;
+
+        for (const seg of segNums) {
+            const segPath = path.join(this.walDir, `log1_${seg.toString().padStart(6, '0')}.wal`);
+            try {
+                const content = await fs.promises.readFile(segPath, 'utf8');
+                for (const line of content.split('\n')) {
+                    if (!line || line.startsWith('DEL|')) continue;
+                    const firstSep = line.indexOf('|');
+                    if (firstSep <= 0) continue;
+                    const lsn = parseInt(line.substring(0, firstSep), 10);
+                    if (!isNaN(lsn) && lsn > maxLsn) {
+                        maxLsn = lsn;
+                    }
+                }
+            } catch {
+                // 段文件不存在或不可读时跳过
+            }
+        }
+
+        return maxLsn;
     }
 
     public async writeLog1(messageId: string, priority: number, data: Record<string, any>): Promise<number | null> {
@@ -227,6 +262,9 @@ export class ImprovedWALWriter {
         }).catch(err => {
             console.error(`[WAL Writer ${this.queueId}] 写入删除标记失败 LSN ${lsn}:`, err);
         });
+
+        // 触发防抖压缩：把已 tombstone 的记录物理从段文件移除
+        this.scheduleCompaction();
     }
 
     public async stop(): Promise<void> {
@@ -240,6 +278,18 @@ export class ImprovedWALWriter {
             } catch (err) {
                 console.error(`[WAL Writer ${this.queueId}] 停止时提交位点失败:`, err);
             }
+        }
+        if (this.compactTimer !== null) {
+            clearTimeout(this.compactTimer);
+            this.compactTimer = null;
+        }
+        // 停止前做一次最终压缩，确保 DEL 已物理生效
+        try {
+            await this.writeMutex.runExclusive(async () => {
+                await this.compactWalSegments();
+            });
+        } catch (err) {
+            console.error(`[WAL Writer ${this.queueId}] 停止时压缩 WAL 失败:`, err);
         }
         // 排空互斥队列，使 pending 的 writeDelete / writeLog1 尽量完成后再停机（仍非 fsync 级保证）
         try {
@@ -364,5 +414,93 @@ export class ImprovedWALWriter {
         } catch { /* 使用默认值 */ }
 
         return { lsn, priority, payload };
+    }
+
+    /**
+     * DEL 写入后的防抖压缩调度
+     */
+    private scheduleCompaction(): void {
+        if (!this.enableWal) return;
+        if (this.compactTimer !== null) {
+            clearTimeout(this.compactTimer);
+        }
+        this.compactTimer = setTimeout(() => {
+            this.writeMutex.runExclusive(async () => {
+                await this.compactWalSegments();
+            }).catch(err => {
+                console.error(`[WAL Writer ${this.queueId}] 压缩 WAL 段失败:`, err);
+            }).finally(() => {
+                this.compactTimer = null;
+            });
+        }, this.compactDebounceMs).unref();
+    }
+
+    /**
+     * 物理压缩 WAL 段：
+     * - 删除所有 DEL 行
+     * - 删除已被 DEL 标记的 Log1 行
+     * - 空旧段直接删除；当前段为空则保留空文件继续写
+     */
+    private async compactWalSegments(): Promise<void> {
+        const segNums = (await fs.promises.readdir(this.walDir))
+            .filter(f => f.startsWith('log1_') && f.endsWith('.wal'))
+            .map(f => parseInt(f.split('_')[1]!.split('.')[0]!, 10))
+            .filter(n => !isNaN(n))
+            .sort((a, b) => a - b);
+
+        if (segNums.length === 0) return;
+
+        const deletedLsns = new Set<number>();
+        const segLog1Lines = new Map<number, string[]>();
+
+        // 第 1 遍：收集 DEL 集合 + 每段 Log1 原始行
+        for (const seg of segNums) {
+            const segPath = path.join(this.walDir, `log1_${seg.toString().padStart(6, '0')}.wal`);
+            try {
+                const content = await fs.promises.readFile(segPath, 'utf8');
+                const lines = content.split('\n').filter(Boolean);
+                const log1Lines: string[] = [];
+                for (const line of lines) {
+                    if (line.startsWith('DEL|')) {
+                        const delLsn = parseInt(line.substring(4), 10);
+                        if (!isNaN(delLsn)) deletedLsns.add(delLsn);
+                        continue;
+                    }
+                    log1Lines.push(line);
+                }
+                segLog1Lines.set(seg, log1Lines);
+            } catch {
+                // 文件可能并发删除，忽略
+            }
+        }
+
+        // 第 2 遍：按 DEL 集合重写段文件
+        for (const seg of segNums) {
+            const segPath = path.join(this.walDir, `log1_${seg.toString().padStart(6, '0')}.wal`);
+            const log1Lines = segLog1Lines.get(seg) || [];
+            const keptLines = log1Lines.filter(line => {
+                const firstSep = line.indexOf('|');
+                if (firstSep <= 0) return false;
+                const lsn = parseInt(line.substring(0, firstSep), 10);
+                if (isNaN(lsn)) return false;
+                return !deletedLsns.has(lsn);
+            });
+
+            try {
+                if (keptLines.length === 0) {
+                    if (seg === this.currentSegmentNum) {
+                        await fs.promises.writeFile(segPath, '', 'utf8');
+                    } else {
+                        await fs.promises.unlink(segPath);
+                    }
+                } else {
+                    const tmpPath = `${segPath}.compact.tmp`;
+                    await fs.promises.writeFile(tmpPath, `${keptLines.join('\n')}\n`, 'utf8');
+                    await fs.promises.rename(tmpPath, segPath);
+                }
+            } catch {
+                // 压缩失败保持原文件，不影响主流程
+            }
+        }
     }
 }
