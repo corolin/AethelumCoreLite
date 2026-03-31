@@ -354,7 +354,7 @@ export class AsyncAxonWorker {
             // 只要它未被 routeMessage 成功写入下一站从而附上 _wal_handled_for_lsn=prevSrcWalLsn，就手动墓碑化
             if (prevSrcQueueId === this.inputQueue.queueId && prevSrcWalLsn !== undefined) {
                 if (impulse.metadata['_wal_handled_for_lsn'] !== prevSrcWalLsn) {
-                    this.inputQueue.confirmDelivery(impulse, prevSrcWalLsn);
+                    await this.inputQueue.confirmDelivery(impulse, prevSrcWalLsn);
                 }
                 // 清理本次 handled 标记，避免污染下个 Worker 的处理
                 if (impulse.metadata['_wal_handled_for_lsn'] === prevSrcWalLsn) {

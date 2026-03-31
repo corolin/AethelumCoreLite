@@ -169,7 +169,7 @@ export class AsyncSynapticQueue {
                         // 过期消息直接丢弃，写入 tombstone 释放 WAL 所有权
                         // （过期消息不会经过 Router，无法由 confirmDelivery 触发）
                         if (this.walWriter && item.metadata['wal_lsn'] !== undefined) {
-                            this.walWriter.writeDelete(item.metadata['wal_lsn'] as number);
+                            await this.walWriter.writeDelete(item.metadata['wal_lsn'] as number);
                         }
                         foundExpired = true;
                         break; // 跳出 for 循环，重新从头遍历优先级
@@ -223,7 +223,7 @@ export class AsyncSynapticQueue {
      *   误用会 tombstone 错误记录。若未传 `explicitLsn`，仅回退到 `item.metadata['_src_wal_lsn']`；
      *   二者皆缺则跳过并告警（绝不回退到 `wal_lsn`）。
      */
-    public confirmDelivery(item: NeuralImpulse, explicitLsn?: number): void {
+    public async confirmDelivery(item: NeuralImpulse, explicitLsn?: number): Promise<void> {
         const fromMeta = item.metadata['_src_wal_lsn'] as number | undefined;
         const lsn = explicitLsn !== undefined && explicitLsn !== null ? explicitLsn : fromMeta;
 
@@ -236,7 +236,7 @@ export class AsyncSynapticQueue {
         }
 
         if (this.walWriter && lsn !== undefined && lsn !== null) {
-            this.walWriter.writeDelete(lsn as number);
+            await this.walWriter.writeDelete(lsn as number);
         }
     }
 
