@@ -240,7 +240,7 @@ export class CoreLiteRouter {
                 const srcQueue = this.queues.get(prevSrcQueueId);
                 if (srcQueue) {
                     // 必须使用“入队前快照”的来源位点，避免被目标队列覆盖。
-                    srcQueue.confirmDelivery(impulse, prevSrcLsn);
+                    await srcQueue.confirmDelivery(impulse, prevSrcLsn);
                 }
                 
                 // 标记该 LSN 已被路由器安全处理并确认移交，Worker.finally 无需兜底清除
