@@ -239,6 +239,8 @@ export class AsyncSynapticQueue {
             clearInterval(this.shrinkTimer);
             this.shrinkTimer = null;
         }
+        // 关键改进：停止时立刻唤醒所有在排队等待消息的 Consumer (Worker)
+        this.clear();
     }
 
     // ============== 崩溃恢复 ==============
