@@ -6,7 +6,10 @@ export enum HookType {
     POST_PROCESS = 'post_process',
     ERROR_HANDLER = 'error_handler',
     TRANSFORM = 'transform',
-    FILTER = 'filter'
+    FILTER = 'filter',
+    // 队列钩子
+    QUEUE_BEFORE_PUT = 'queue_before_put',
+    QUEUE_AFTER_ACK = 'queue_after_ack'
 }
 
 /**
@@ -20,7 +23,7 @@ export enum HookExecutionStatus {
 }
 
 export interface HookContext {
-    workerId: string;
+    workerId?: string;
     queueId: string;
     timestamp: number;
     error?: unknown;

@@ -1,6 +1,6 @@
 import { NeuralImpulse } from './message.js';
-// WAL：移交/过期用 writeDelete；旧版 writeLog2 仅保留于 ImprovedWALWriter（tracker.ptr 兼容）
-import { ImprovedWALWriter } from '../utils/wal_writer.js';
+import { AsyncHookChain } from '../hooks/chain.js';
+import { HookType } from '../hooks/types.js';
 import type { WALRecoveredEntry } from '../utils/wal_writer.js';
 
 export interface QueueMetrics {
@@ -25,37 +25,17 @@ export class AsyncSynapticQueue {
     }> = [];
 
     private metrics: QueueMetrics;
-    private walWriter: ImprovedWALWriter | null = null;
-    private enableWal: boolean;
-    private walReady: Promise<void> | null = null;
+    private hooks: AsyncHookChain;
     public autoExpand: boolean;
     private baseCapacity: number;
     private shrinkTimer: NodeJS.Timeout | null = null;
 
-    constructor(queueId: string, maxSize: number = 0, enableWal: boolean = true, autoExpand: boolean = true, shrinkIntervalMs: number = 10 * 60 * 1000) {
+    constructor(queueId: string, maxSize: number = 0, autoExpand: boolean = true, shrinkIntervalMs: number = 10 * 60 * 1000) {
         this.queueId = queueId;
         this.maxSize = maxSize;
         this.autoExpand = autoExpand;
         this.baseCapacity = maxSize;
-        this.enableWal = enableWal;
-
-        if (this.enableWal) {
-            this.walWriter = new ImprovedWALWriter(queueId, "wal_data_v2", true);
-            // 异步初始化 WAL 并恢复未提交消息，不阻塞队列构造
-            this.walReady = this.walWriter.start()
-                .then((recoveredEntries) => {
-                    for (const entry of recoveredEntries) {
-                        this.replayEntry(entry);
-                    }
-                    if (recoveredEntries.length > 0) {
-                        console.log(`[QUEUE ${queueId}] 已恢复 ${recoveredEntries.length} 条消息`);
-                    }
-                })
-                .catch(err => {
-                    console.error(`[QUEUE ${queueId}] WAL 初始化失败，降级为无 WAL 模式:`, err);
-                    this.walWriter = null;
-                });
-        }
+        this.hooks = new AsyncHookChain(`${queueId}_hooks`);
 
         // 初始化 5 个优先级队列
         this.queues = Array.from({ length: 5 }, () => []);
@@ -70,6 +50,10 @@ export class AsyncSynapticQueue {
 
         // 启动定时缩容检查
         this.startShrinkTimer(shrinkIntervalMs);
+    }
+
+    public getHooks(): AsyncHookChain {
+        return this.hooks;
     }
 
     /**
@@ -98,20 +82,26 @@ export class AsyncSynapticQueue {
         const clampedPriority = Math.max(0, Math.min(4, priority));
 
         try {
-            let lsn: number | null = null;
-            // 等待 WAL 初始化+恢复完成（如果正在初始化中）
-            if (this.walReady) {
-                await this.walReady;
-            }
-            if (this.walWriter) {
-                // Write to WAL Log1 before processing
-                lsn = await this.walWriter.writeLog1(item.messageId, priority, item.toDict());
-                item.metadata['wal_lsn'] = lsn;
+            // 执行 BEFORE_PUT 钩子 (例如：WAL 写入、数据清洗、审计)
+            const context = {
+                queueId: this.queueId,
+                timestamp: Date.now(),
+                stage: 'put'
+            };
+
+            const processedItem = await this.hooks.executeHooks(item, HookType.QUEUE_BEFORE_PUT, context);
+            if (!processedItem) {
+                // 如果钩子返回 null，视为该消息被拦截，丢弃之
+                this.metrics.size--;
+                this.metrics.totalDropped++;
+                return true; // 虽然被拦截，但对调用方来说已“处理”完成
             }
 
+            const impulseToPut = processedItem;
+
             // 📊 消息流动日志：入队
-            const fromAgent = item.sourceAgent || 'Unknown';
-            const enqueueMsg = `⬇️  [ENQUEUE] ${item.sessionId} | ${fromAgent} → ${this.queueId} | size: ${this.metrics.size}`;
+            const fromAgent = impulseToPut.sourceAgent || 'Unknown';
+            const enqueueMsg = `⬇️  [ENQUEUE] ${impulseToPut.sessionId} | ${fromAgent} → ${this.queueId} | size: ${this.metrics.size}`;
             console.log(enqueueMsg);
             globalThis.logRaw?.(enqueueMsg);
 
@@ -123,24 +113,22 @@ export class AsyncSynapticQueue {
                 }
                 this.metrics.size--; // 直接投递不占队列位置，回滚乐观递增
                 this.metrics.totalMessages++;
-                const directMsg = `⚡ [DEQUEUE] ${item.sessionId} | ${this.queueId} → 直接投递给等待消费者`;
+                const directMsg = `⚡ [DEQUEUE] ${impulseToPut.sessionId} | ${this.queueId} → 直接投递给等待消费者`;
                 console.log(directMsg);
                 globalThis.logRaw?.(directMsg);
-                // 直接投递路径也需要记录来源信息，确保 Router 能正确写 Log2
-                // wal_lsn 此时还是本队列的值，必须在 consumer.resolve 前保存
-                item.metadata['_src_queue_id'] = this.queueId;
-                item.metadata['_src_wal_lsn'] = lsn ?? item.metadata['wal_lsn'];
-                consumer.resolve(item);
+                // 直接投递路径也需要记录来源信息，确保 Router 能正确写 Log2 (via AFTER_ACK Hooks)
+                impulseToPut.metadata['_src_queue_id'] = this.queueId;
+                consumer.resolve(impulseToPut);
                 return true;
             }
 
             // 否则放入对应的优先级队列
-            this.queues[clampedPriority]!.push(item);
+            this.queues[clampedPriority]!.push(impulseToPut);
             this.metrics.totalMessages++;
 
             return true;
         } catch (err) {
-            // WAL 写入失败时回滚乐观递增
+            // 钩子失败时回滚乐观递增
             this.metrics.size--;
             throw err;
         }
@@ -148,8 +136,6 @@ export class AsyncSynapticQueue {
 
     /**
      * 异步获取消息
-     * 注意：取出消息时不写 Log2，Log2 由 Router 在移交成功后通过 confirmDelivery() 触发
-     * @param timeoutMs 超时时间（毫秒），可选
      */
     public async asyncGet(timeoutMs?: number): Promise<NeuralImpulse | null> {
         // 1. 使用循环遍历优先级队列，跳过过期消息（避免递归栈溢出）
@@ -166,19 +152,16 @@ export class AsyncSynapticQueue {
                         const expireMsg = `⏰ [DEQUEUE] ${item.sessionId} | ${this.queueId} → 消息已过期，丢弃`;
                         console.log(expireMsg);
                         globalThis.logRaw?.(expireMsg);
-                        // 过期消息直接丢弃，写入 tombstone 释放 WAL 所有权
-                        // （过期消息不会经过 Router，无法由 confirmDelivery 触发）
-                        if (this.walWriter && item.metadata['wal_lsn'] !== undefined) {
-                            await this.walWriter.writeDelete(item.metadata['wal_lsn'] as number);
-                        }
+                        
+                        // 过期消息直接丢弃，触发确认钩子以释放资源（如 WAL tombstone）
+                        await this.confirmDelivery(item);
+                        
                         foundExpired = true;
                         break; // 跳出 for 循环，重新从头遍历优先级
                     }
 
-                    // 记录来源队列 ID 和当前 LSN，供 Router 在移交成功后写 Log2
-                    // 必须在此处保存 wal_lsn，因为消息进入下一个队列后 wal_lsn 会被覆盖
+                    // 记录来源队列 ID，供 Router/Worker 在移交完成后确认
                     item.metadata['_src_queue_id'] = this.queueId;
-                    item.metadata['_src_wal_lsn'] = item.metadata['wal_lsn'];
 
                     // 消息流动日志：出队
                     const dequeueMsg = `⬆️  [DEQUEUE] ${item.sessionId} | ${this.queueId} → Worker | remaining: ${this.metrics.size}`;
@@ -193,18 +176,15 @@ export class AsyncSynapticQueue {
         }
 
         // 2. 队列为空，等待新消息到来
-        // 🔥 不输出等待日志，减少日志噪音
         return new Promise((resolve) => {
             const consumer = { resolve, timeoutId: undefined as NodeJS.Timeout | undefined };
 
             if (timeoutMs) {
                 consumer.timeoutId = setTimeout(() => {
-                    // 超时处理：从等待队列中移除消费者并返回 null
                     const index = this.waitingConsumers.indexOf(consumer);
                     if (index !== -1) {
                         this.waitingConsumers.splice(index, 1);
                     }
-                    // 🔥 不输出超时日志，减少日志噪音
                     resolve(null);
                 }, timeoutMs);
             }
@@ -215,29 +195,18 @@ export class AsyncSynapticQueue {
 
     /**
      * 移交成功确认：Router 在消息成功放入目标队列后调用
-     * 向来源队列的 WAL 写入 tombstone（DEL 标记），释放消息所有权
-     *
-     * @param item 消息对象
-     * @param explicitLsn 来源队列的 LSN（Router 应传入 `impulse.metadata['_src_wal_lsn']`）
-     *   **禁止**使用 `item.metadata['wal_lsn']` 作为来源 LSN：移交成功后该字段已是**目标队列**的 LSN，
-     *   误用会 tombstone 错误记录。若未传 `explicitLsn`，仅回退到 `item.metadata['_src_wal_lsn']`；
-     *   二者皆缺则跳过并告警（绝不回退到 `wal_lsn`）。
+     * 或者 Worker 在处理完消息（终点站）后调用
      */
     public async confirmDelivery(item: NeuralImpulse, explicitLsn?: number): Promise<void> {
-        const fromMeta = item.metadata['_src_wal_lsn'] as number | undefined;
-        const lsn = explicitLsn !== undefined && explicitLsn !== null ? explicitLsn : fromMeta;
+        // 执行 AFTER_ACK 钩子 (例如：WAL writeDelete / PostgreSQL COMMIT)
+        const context = {
+            queueId: this.queueId,
+            timestamp: Date.now(),
+            stage: 'confirm',
+            explicitLsn: explicitLsn // 用于保留对 WAL lsn 的向下兼容支持
+        };
 
-        if (this.walWriter && (lsn === undefined || lsn === null)) {
-            console.warn(
-                `[QUEUE ${this.queueId}] confirmDelivery 跳过：缺少来源 LSN（需 explicitLsn 或 metadata._src_wal_lsn；` +
-                    `勿使用 wal_lsn，移交后已为目标队列 LSN） messageId=${item.messageId}`,
-            );
-            return;
-        }
-
-        if (this.walWriter && lsn !== undefined && lsn !== null) {
-            await this.walWriter.writeDelete(lsn as number);
-        }
+        await this.hooks.executeHooks(item, HookType.QUEUE_AFTER_ACK, context);
     }
 
     public size(): number {
@@ -270,26 +239,20 @@ export class AsyncSynapticQueue {
             clearInterval(this.shrinkTimer);
             this.shrinkTimer = null;
         }
-        if (this.walWriter) {
-            await this.walWriter.stop();
-        }
     }
 
     // ============== 崩溃恢复 ==============
 
     /**
-     * 定时缩容检查：每 10 分钟检查一次，如果队列大小低于基准容量，缩回基准
+     * 定时缩容检查
      */
     private startShrinkTimer(intervalMs: number): void {
-        if (this.maxSize <= 0) return; // 无上限的队列不需要
+        if (this.maxSize <= 0) return; 
         this.shrinkTimer = setInterval(() => {
             this.checkShrink();
         }, intervalMs).unref();
     }
 
-    /**
-     * 内部缩容逻辑
-     */
     private checkShrink(): void {
         if (this.maxSize > this.baseCapacity && this.metrics.size < this.baseCapacity) {
             this.maxSize = this.baseCapacity;
@@ -299,12 +262,13 @@ export class AsyncSynapticQueue {
     }
 
     /**
-     * 回放单条 WAL 记录到队列（不写 WAL，已有 LSN）
+     * 回放单条 WAL 记录到队列
      */
-    private replayEntry(entry: WALRecoveredEntry): void {
+    public internalReplay(entry: WALRecoveredEntry): void {
         try {
             const dict = JSON.parse(entry.payload);
             const item = NeuralImpulse.fromDict(dict);
+            // 恢复 LSN，以便后续确认时能正确删除
             item.metadata['wal_lsn'] = entry.lsn;
 
             const clampedPriority = Math.max(0, Math.min(4, dict.priority ?? 2));
