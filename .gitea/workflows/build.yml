@@ -30,7 +30,6 @@ jobs:
 
       - name: Build
         run: bunx tsc
-<deleted lines 34-37>
       - name: Publish prerelease (next)
         if: gitea.ref == 'refs/heads/dev'
         env:
