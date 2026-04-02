@@ -46,3 +46,6 @@ tmp/
 # Review files
 REVIEW*.md
 logs_analytics.db
+
+# Plan files
+.plan/

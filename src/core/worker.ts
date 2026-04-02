@@ -3,6 +3,14 @@ import { NeuralImpulse, MessageStatus } from './message.js';
 import { AsyncHookChain } from '../hooks/chain.js';
 import { HookType } from '../hooks/types.js';
 import type { HookContext } from '../hooks/types.js';
+import {
+    createWorkerPluginMount,
+    disposeHookPluginDisposers,
+    type HookPluginAttachResult,
+    type HookPluginMount,
+    type HookPluginRegistry,
+    type HookPluginSpec,
+} from '../hooks/runtime.js';
 import { CoreLiteRouter } from './router.js';
 
 export enum WorkerState {
@@ -52,6 +60,7 @@ export class AsyncAxonWorker {
     // 🔥 路由追踪：检测子类是否手动路由过消息
     private hasManuallyRouted: boolean = false;
     private originalRouter: CoreLiteRouter;
+    private pluginDisposers: Array<() => void | Promise<void>> = [];
 
     constructor(id: string, inputQueue: AsyncSynapticQueue, router: CoreLiteRouter) {
         this.id = id;
@@ -100,6 +109,31 @@ export class AsyncAxonWorker {
     public getPostHooks(): AsyncHookChain { return this.postHooks; }
     public getErrorHooks(): AsyncHookChain { return this.errorHooks; }
     public getInputQueue(): AsyncSynapticQueue { return this.inputQueue; }
+
+    public async attachHookPlugins(
+        registry: HookPluginRegistry,
+        specs: HookPluginSpec[],
+        mount: Partial<HookPluginMount> = {},
+    ): Promise<HookPluginAttachResult> {
+        const result = await registry.resolve(createWorkerPluginMount(this, mount), specs);
+
+        for (const hook of result.hooks) {
+            if (hook.hookType === HookType.PRE_PROCESS) {
+                this.preHooks.addHook(hook);
+                continue;
+            }
+            if (hook.hookType === HookType.POST_PROCESS) {
+                this.postHooks.addHook(hook);
+                continue;
+            }
+            if (hook.hookType === HookType.ERROR_HANDLER) {
+                this.errorHooks.addHook(hook);
+            }
+        }
+
+        this.pluginDisposers.push(...result.disposers);
+        return result;
+    }
 
     // 暴露给 Monitor 采集的指标
     public getInternalErrorCount(): number { return this.internalErrorCount; }
@@ -185,6 +219,7 @@ export class AsyncAxonWorker {
         }
 
         this.state = WorkerState.STOPPED;
+        await disposeHookPluginDisposers(this.pluginDisposers);
     }
 
     /**

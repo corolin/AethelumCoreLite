@@ -19,6 +19,12 @@ export class AsyncHookChain {
         this.hooks.sort((a, b) => b.priority - a.priority);
     }
 
+    public addHooks(hooks: AsyncHook[]): void {
+        for (const hook of hooks) {
+            this.addHook(hook);
+        }
+    }
+
     public removeHook(hookName: string): boolean {
         const initialLength = this.hooks.length;
         this.hooks = this.hooks.filter(h => h.name !== hookName);
@@ -31,6 +37,10 @@ export class AsyncHookChain {
 
     public getHooksByType(type: HookType): AsyncHook[] {
         return this.hooks.filter(h => h.hookType === type && h.enabled);
+    }
+
+    public listHooks(): AsyncHook[] {
+        return [...this.hooks];
     }
 
     /**

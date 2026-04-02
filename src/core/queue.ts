@@ -1,6 +1,14 @@
 import { NeuralImpulse } from './message.js';
 import { AsyncHookChain } from '../hooks/chain.js';
 import { HookType } from '../hooks/types.js';
+import {
+    createQueuePluginMount,
+    disposeHookPluginDisposers,
+    type HookPluginAttachResult,
+    type HookPluginMount,
+    type HookPluginRegistry,
+    type HookPluginSpec,
+} from '../hooks/runtime.js';
 import type { WALRecoveredEntry } from '../utils/wal_writer.js';
 
 export interface QueueMetrics {
@@ -29,6 +37,7 @@ export class AsyncSynapticQueue {
     public autoExpand: boolean;
     private baseCapacity: number;
     private shrinkTimer: NodeJS.Timeout | null = null;
+    private pluginDisposers: Array<() => void | Promise<void>> = [];
 
     constructor(queueId: string, maxSize: number = 0, autoExpand: boolean = true, shrinkIntervalMs: number = 10 * 60 * 1000) {
         this.queueId = queueId;
@@ -54,6 +63,17 @@ export class AsyncSynapticQueue {
 
     public getHooks(): AsyncHookChain {
         return this.hooks;
+    }
+
+    public async attachHookPlugins(
+        registry: HookPluginRegistry,
+        specs: HookPluginSpec[],
+        mount: Partial<HookPluginMount> = {},
+    ): Promise<HookPluginAttachResult> {
+        const result = await registry.resolve(createQueuePluginMount(this, mount), specs);
+        this.hooks.addHooks(result.hooks);
+        this.pluginDisposers.push(...result.disposers);
+        return result;
     }
 
     /**
@@ -241,6 +261,7 @@ export class AsyncSynapticQueue {
         }
         // 关键改进：停止时立刻唤醒所有在排队等待消息的 Consumer (Worker)
         this.clear();
+        await disposeHookPluginDisposers(this.pluginDisposers);
     }
 
     // ============== 崩溃恢复 ==============

@@ -4,6 +4,7 @@ import { NeuralImpulse } from '../core/message.js';
 import { ImprovedWALWriter } from '../utils/wal_writer.js';
 import type { AsyncSynapticQueue } from '../core/queue.js';
 import type { HookContext } from './types.js';
+import type { HookPluginDefinition } from './runtime.js';
 
 /**
  * WAL 持久化钩子集合
@@ -76,4 +77,21 @@ export class WALHookManager {
     public async stop(): Promise<void> {
         await this.walWriter.stop();
     }
+}
+
+export function createWalHookPlugin(defaultWalDir: string = "wal_data_v2"): HookPluginDefinition<{ walDir?: string }> {
+    return {
+        id: "wal",
+        description: "Attach WAL replay and queue lifecycle hooks.",
+        supports: (mount) => mount.kind === "queue",
+        setup: async (mount, options) => {
+            const queue = mount.host as AsyncSynapticQueue;
+            const manager = new WALHookManager(queue.queueId, options.walDir ?? defaultWalDir);
+            await manager.startAndReplay(queue);
+            return {
+                hooks: [manager.createPrePutHook(), manager.createAfterAckHook()],
+                dispose: async () => manager.stop(),
+            };
+        },
+    };
 }

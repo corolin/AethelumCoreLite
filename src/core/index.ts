@@ -2,5 +2,8 @@ export * from './error_handler.js';
 export * from './message.js';
 export * from './monitor.js';
 export * from './queue.js';
+export * from './queue-factory.js';
+export * from './runtime-builder.js';
 export * from './router.js';
 export * from './worker.js';
+export * from './worker-factory.js';
