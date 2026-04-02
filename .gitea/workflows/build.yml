@@ -30,12 +30,7 @@ jobs:
 
       - name: Build
         run: bunx tsc
-
-      # --- dev 分支: 发布为 next (pre-release) ---
-      - name: Bump prerelease version
-        if: gitea.ref == 'refs/heads/dev'
-        run: npm version prerelease --preid dev --no-git-tag-version
-
+<deleted lines 34-37>
       - name: Publish prerelease (next)
         if: gitea.ref == 'refs/heads/dev'
         env:
