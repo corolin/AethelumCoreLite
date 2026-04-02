@@ -5,6 +5,7 @@
     "": {
       "name": "aethelumcorelite-nodejs",
       "dependencies": {
+        "@syrkos/aethelum-core-lite": "1.0.2-dev.1",
         "hono": "^4.12.4",
         "uuid": "^13.0.0",
         "zod": "^4.3.6",
@@ -41,6 +42,8 @@
     "@humanwhocodes/module-importer": ["@humanwhocodes/module-importer@1.0.1", "https://repo.huaweicloud.com/repository/npm/@humanwhocodes/module-importer/-/module-importer-1.0.1.tgz", {}, "sha512-bxveV4V8v5Yb4ncFTT3rPSgZBOpCkjfK0y4oVVVJwIuDVBRMDXrPyXRL988i5ap9m9bnyEEjWfm5WkBmtffLfA=="],
 
     "@humanwhocodes/retry": ["@humanwhocodes/retry@0.4.3", "https://repo.huaweicloud.com/repository/npm/@humanwhocodes/retry/-/retry-0.4.3.tgz", {}, "sha512-bV0Tgo9K4hfPCek+aMAn81RppFKv2ySDQeMoSZuvTASywNTnVJCArCZE2FWqpvIatKu7VMRLWlR1EazvVhDyhQ=="],
+
+    "@syrkos/aethelum-core-lite": ["@syrkos/aethelum-core-lite@1.0.2-dev.1", "https://git.internal.syrkos.cn/api/packages/Corolin/npm/%40syrkos%2Faethelum-core-lite/-/1.0.2-dev.1/aethelum-core-lite-1.0.2-dev.1.tgz", { "dependencies": { "hono": "^4.12.4", "uuid": "^13.0.0", "zod": "^4.3.6" } }, "sha512-xcLRHmbviWSj0GsQMueSUT7NMCafGtTLqzpe/dG6qLO0B4JaKgXa33CV1JNndxflqZB19er32inzpcVT1CxOVQ=="],
 
     "@types/bun": ["@types/bun@1.3.10", "https://repo.huaweicloud.com/repository/npm/@types/bun/-/bun-1.3.10.tgz", { "dependencies": { "bun-types": "1.3.10" } }, "sha512-0+rlrUrOrTSskibryHbvQkDOWRJwJZqZlxrUs1u4oOoTln8+WIXBPmAuCF35SWB2z4Zl3E84Nl/D0P7803nigQ=="],
 
