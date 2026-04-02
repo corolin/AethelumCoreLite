@@ -29,7 +29,7 @@ jobs:
         run: bun run typecheck
 
       - name: Build
-        run: bunx tsc
+        run: bun run build
       - name: Publish prerelease (next)
         if: gitea.ref == 'refs/heads/dev'
         env:
