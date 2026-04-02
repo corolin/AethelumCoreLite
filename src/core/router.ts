@@ -4,6 +4,7 @@ import { NeuralImpulse, MessageStatus } from './message.js';
 import { AsyncWorkerMonitor } from './monitor.js';
 import { AsyncErrorHandler } from './error_handler.js';
 import { getStructuredLogger } from '../utils/structured_logger.js';
+import type { QueueDefinition } from './queue-factory.js';
 
 const routerLogger = getStructuredLogger('CoreLiteRouter');
 
@@ -33,9 +34,19 @@ export class CoreLiteRouter {
     public monitor: AsyncWorkerMonitor;
     public errorHandler: AsyncErrorHandler;
 
-    constructor(enableWal: boolean = true) {
-        this.enableWal = enableWal;
-        this.setupBuiltinQueues();
+    constructor(options: boolean | {
+        enableWal?: boolean;
+        builtInQueues?: QueueDefinition[];
+        skipBuiltInQueues?: boolean;
+    } = true) {
+        const normalized = typeof options === 'boolean'
+            ? { enableWal: options }
+            : options;
+
+        this.enableWal = normalized.enableWal ?? true;
+        if (!normalized.skipBuiltInQueues) {
+            this.setupBuiltinQueues(normalized.builtInQueues);
+        }
         this.monitor = new AsyncWorkerMonitor();
         this.errorHandler = new AsyncErrorHandler(this);
     }
@@ -44,22 +55,45 @@ export class CoreLiteRouter {
      * 注册系统内置强制队列
      * Q_RESPONSE_SINK 为终端队列，不需要 WAL
      */
-    private setupBuiltinQueues(): void {
-        const builtinQueues = [
+    private setupBuiltinQueues(builtInQueues?: QueueDefinition[]): void {
+        const definitions = builtInQueues ?? this.getDefaultBuiltInQueueDefinitions();
+        for (const definition of definitions) {
+            const queue = new AsyncSynapticQueue(
+                definition.id,
+                definition.capacity ?? 0,
+                definition.autoExpand ?? true,
+                definition.shrinkIntervalMs ?? 10 * 60 * 1000,
+            );
+            this.queues.set(definition.id, queue);
+        }
+    }
+
+    private getDefaultBuiltInQueueDefinitions(): QueueDefinition[] {
+        const durableQueues = [
             'Q_AUDIT_INPUT',
-            'Q_AUDITED_INPUT', // 修复 Python 版本遗漏的问题
+            'Q_AUDITED_INPUT',
             'Q_AUDIT_OUTPUT',
             'Q_ERROR',
-            'Q_REFLECTION' // 后台自我反思队列
+            'Q_REFLECTION',
         ];
 
-        for (const queueId of builtinQueues) {
-            this.queues.set(queueId, new AsyncSynapticQueue(queueId, 1000, this.enableWal));
-        }
+        const definitions: QueueDefinition[] = durableQueues.map((id) => ({
+            id,
+            capacity: 1000,
+            autoExpand: true,
+        }));
+        definitions.push({
+            id: 'Q_DONE',
+            capacity: 1000,
+            autoExpand: false,
+        });
+        definitions.push({
+            id: 'Q_RESPONSE_SINK',
+            capacity: 1000,
+            autoExpand: false,
+        });
 
-        // 终端队列不需要 WAL（最终归宿，无进一步移交）
-        this.queues.set('Q_DONE', new AsyncSynapticQueue('Q_DONE', 1000, false));
-        this.queues.set('Q_RESPONSE_SINK', new AsyncSynapticQueue('Q_RESPONSE_SINK', 1000, false));
+        return definitions;
     }
 
     /**
