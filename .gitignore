@@ -49,3 +49,6 @@ logs_analytics.db
 
 # Plan files
 .plan/
+
+# Gitea CI/CD (force-add on Gitea with `git add -f`, stripped by sync workflow before pushing to GitHub)
+.gitea/
