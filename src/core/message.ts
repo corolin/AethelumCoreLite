@@ -43,9 +43,22 @@ export interface NeuralImpulseOptions {
    */
   routingHistory?: string[];
   /**
+   * 每跳时间戳记录（node + 毫秒时间戳），用于精确追踪消费耗时。
+   * 两两相减即得每跳耗时；`markHop()` 在运行时自动追加。
+   */
+  hopTimings?: HopTiming[];
+  /**
    * 创建/序列化时间戳（毫秒）。恢复时传入以保持与 `toDict` 一致。
    */
   timestamp?: number;
+}
+
+/** 神经脉冲经过的每一跳（节点名 + 毫秒时间戳） */
+export interface HopTiming {
+  /** 节点标识：`队列Id:enqueue` / `队列Id:dequeue` / `workerId:process` / `队列Id:route` 等 */
+  node: string;
+  /** 毫秒时间戳 */
+  ts: number;
 }
 
 /** 从序列化值安全还原 MessageStatus（未知值回退为 CREATED） */
@@ -69,6 +82,8 @@ export class NeuralImpulse {
   public content: any;
   public metadata: Record<string, any>;
   public routingHistory: string[];
+  /** 每跳时间戳记录，两两相减即得每跳耗时；运行时由 markHop() 追加 */
+  public hopTimings: HopTiming[];
   public priority: MessagePriority;
   public expiresAt: number | undefined;
   public status: MessageStatus;
@@ -91,6 +106,10 @@ export class NeuralImpulse {
       Array.isArray(options.routingHistory) && options.routingHistory.length > 0
         ? [...options.routingHistory]
         : [this.sourceAgent];
+    this.hopTimings =
+      Array.isArray(options.hopTimings) && options.hopTimings.length > 0
+        ? options.hopTimings.map((h) => ({ node: h.node, ts: h.ts }))
+        : [];
   }
 
   /**
@@ -127,6 +146,44 @@ export class NeuralImpulse {
   }
 
   /**
+   * 记录一次路由/处理跳的时间点。
+   * 每跳的耗时 = 相邻两个 hop 时间戳之差；端到端耗时 = 末跳 - timestamp（出生时间）。
+   */
+  public markHop(node: string, ts: number = Date.now()): void {
+    this.hopTimings.push({ node, ts });
+  }
+
+  /** 最近一跳的时间戳（无记录时返回 undefined） */
+  public getLastHopTs(): number | undefined {
+    const last = this.hopTimings[this.hopTimings.length - 1];
+    return last?.ts;
+  }
+
+  /**
+   * 端到端耗时（ms）：最近一跳时间 - 创建时间。
+   * 无任何跳记录时回退为 `now - timestamp`。
+   */
+  public getEndToEndDuration(): number {
+    const lastTs = this.getLastHopTs() ?? Date.now();
+    return Math.max(0, lastTs - this.timestamp);
+  }
+
+  /**
+   * 解析 UUIDv7 时间戳（毫秒精度，取自前 48 位时间戳位）。
+   * 非 v7 或格式非法时返回 null。
+   */
+  public static parseUuidV7Timestamp(messageId: string): number | null {
+    const hex = messageId.replace(/-/g, '');
+    if (hex.length < 14) return null;
+    // v7 版本位固定为 7（第 13 个 hex 字符的高 4 位）
+    if (hex[12] !== '7') return null;
+    const tsHex = hex.slice(0, 12);
+    const ts = parseInt(tsHex, 16);
+    if (isNaN(ts) || ts <= 0) return null;
+    return ts;
+  }
+
+  /**
    * 使用统一验证器校验消息内容
    */
   public async validate(validator: UnifiedValidator): Promise<ValidationResult[]> {
@@ -150,6 +207,7 @@ export class NeuralImpulse {
       expiresAt: dict.expiresAt,
       ...(status !== undefined ? { status } : {}),
       ...(Array.isArray(dict.routingHistory) ? { routingHistory: dict.routingHistory as string[] } : {}),
+      ...(Array.isArray(dict.hopTimings) ? { hopTimings: dict.hopTimings as HopTiming[] } : {}),
       ...(typeof dict.timestamp === 'number' ? { timestamp: dict.timestamp } : {}),
     });
   }
@@ -170,7 +228,8 @@ export class NeuralImpulse {
       expiresAt: this.expiresAt,
       status: this.status,
       timestamp: this.timestamp,
-      routingHistory: this.routingHistory
+      routingHistory: this.routingHistory,
+      hopTimings: this.hopTimings.map((h) => ({ node: h.node, ts: h.ts }))
     };
   }
 }

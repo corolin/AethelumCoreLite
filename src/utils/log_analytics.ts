@@ -1,4 +1,4 @@
-import { Database } from 'bun:sqlite';
+import { Database } from './sqlite-runtime.js';
 import { LogLevel } from './structured_logger.js';
 import type { LogEntry } from './structured_logger.js';
 import { join } from 'path';

@@ -32,6 +32,8 @@ export class CoreLiteRuntimeBuilder {
         const router = new CoreLiteRouter({
             enableWal: definition.router?.enableWal ?? true,
             skipBuiltInQueues: true,
+            // v1.1.1 F1: 把插件注册表传入 Router，使运行期 ensureQueue 可按定义挂 hookPlugins（如 WAL）
+            hookRegistry: this.hookRegistry,
         });
         if (!definition.router?.skipBuiltInQueues) {
             await this.registerQueues(
@@ -79,6 +81,9 @@ export class CoreLiteRuntimeBuilder {
     }
 
     private getDefaultBuiltInQueueDefinitions(definition: CoreLiteRuntimeDefinition): QueueDefinition[] {
+        // @deprecated Q_AUDIT_INPUT（AUDIT_I）、Q_AUDITED_INPUT（AUDIT_II）、Q_AUDIT_OUTPUT、Q_REFLECTION
+        // 为原审查流水线的内置队列，自本版本起废弃；审查机制交由 Agent 层处理，框架不再关心。
+        // 保留仅为兼容旧版，后续版本将移除。
         const durableQueues = [
             "Q_AUDIT_INPUT",
             "Q_AUDITED_INPUT",

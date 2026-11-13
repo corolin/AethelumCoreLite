@@ -1,4 +1,4 @@
-import { describe, expect, test, beforeEach, afterEach, spyOn } from "bun:test";
+import { describe, expect, test, beforeEach, afterEach } from "bun:test";
 import { AsyncSynapticQueue } from "../../src/core/queue.js";
 import { NeuralImpulse, MessagePriority } from "../../src/core/message.js";
 
@@ -98,7 +98,7 @@ describe("AsyncSynapticQueue - Unit Tests", () => {
         expect(queue.size()).toBe(0); // Both processed (one discarded, one returned)
     });
     test("autoExpand increases capacity", async () => {
-        queue = new AsyncSynapticQueue("exp_q", 2, false, true);
+        queue = new AsyncSynapticQueue("exp_q", 2, true);
         await queue.asyncPut(new NeuralImpulse({ actionIntent: "i1" }));
         await queue.asyncPut(new NeuralImpulse({ actionIntent: "i2" }));
         
@@ -121,21 +121,7 @@ describe("AsyncSynapticQueue - Unit Tests", () => {
         expect(queue.maxSize).toBe(2);
     });
 
-    test("WAL initialization failure handles gracefully", async () => {
-        const { ImprovedWALWriter } = require("../../src/utils/wal_writer.js");
-        const startSpy = spyOn(ImprovedWALWriter.prototype, "start").mockRejectedValue(new Error("Init fail"));
-        const errorSpy = spyOn(console, "error").mockImplementation(() => {});
-        
-        const foulQueue = new AsyncSynapticQueue("foul_q", 10, true, false);
-        // Wait for the catch block
-        await new Promise(r => setTimeout(r, 100));
-        
-        expect(errorSpy).toHaveBeenCalled();
-        expect((foulQueue as any).walWriter).toBeNull();
-        
-        startSpy.mockRestore();
-        errorSpy.mockRestore();
-    });
+    test.skip("WAL initialization failure handles gracefully — 旧版 Queue 曾内置 WAL 初始化，现已移至 Hook 插件；此测试暂时保留以供未来恢复参考", () => {});
 
     test("confirmDelivery handles no WAL context", () => {
         const impulse = new NeuralImpulse({ actionIntent: "test" });
@@ -143,18 +129,5 @@ describe("AsyncSynapticQueue - Unit Tests", () => {
         queue.confirmDelivery(impulse);
     });
 
-    test("confirmDelivery 缺少来源 LSN 时不误用 wal_lsn（仅 wal_lsn 时告警并跳过）", async () => {
-        const walQueue = new AsyncSynapticQueue("wal_confirm_q", 5, true, false);
-        await new Promise((r) => setTimeout(r, 150));
-        const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
-
-        const impulse = new NeuralImpulse({ actionIntent: "test" });
-        impulse.metadata["wal_lsn"] = 999;
-        // 无 explicitLsn、无 _src_wal_lsn：不得把 999 当作来源队列 tombstone
-        walQueue.confirmDelivery(impulse);
-
-        expect(warnSpy).toHaveBeenCalled();
-        warnSpy.mockRestore();
-        await walQueue.stop();
-    });
+    test.skip("confirmDelivery 缺少来源 LSN 时不误用 wal_lsn — 旧版 Queue 曾内置 WAL 逻辑，现已移至 Hook 插件；此测试暂时保留以供未来恢复参考", () => {});
 });

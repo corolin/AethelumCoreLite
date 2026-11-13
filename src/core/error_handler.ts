@@ -109,14 +109,17 @@ export class AsyncErrorHandler {
         const originalSource = originalImpulse?.sourceAgent || 'unknown';
 
         const errorImpulse = new NeuralImpulse({
+            ...(originalImpulse?.messageId ? { messageId: originalImpulse.messageId } : {}), // 守恒：错误登记与原始脉冲同 ID
             sessionId: originalSessionId, // 继承导致错误的会话
             actionIntent: 'Q_ERROR',
             sourceAgent: originalSource,  // 保留原始来源 Agent，便于追溯
             content: error.message,
-            priority: MessagePriority.CRITICAL // 通常错误具有更高的优先级
+            priority: MessagePriority.CRITICAL, // 通常错误具有更高的优先级
+            ...(originalImpulse?.hopTimings ? { hopTimings: originalImpulse.hopTimings.map((h) => ({ ...h })) } : {}),
         });
 
         errorImpulse.metadata = {
+            ...(originalImpulse?.metadata ? { ...originalImpulse.metadata } : {}),
             error_type: errorType,
             error_message: error.message,
             error_stack: error.stack,

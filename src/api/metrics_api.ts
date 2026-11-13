@@ -1,4 +1,6 @@
 import { Hono } from 'hono';
+import { createServer } from 'node:http';
+import type { Server } from 'node:http';
 import type { CoreLiteRouter } from '../core/router.js';
 
 export class MetricsAPI {
@@ -60,7 +62,7 @@ export class MetricsAPI {
 
 export class MetricsAPIServer {
     private metricsApi: MetricsAPI;
-    private server: any;
+    private server: ReturnType<typeof Bun.serve> | Server | null = null;
 
     constructor(
         public host: string = "127.0.0.1",
@@ -74,22 +76,53 @@ export class MetricsAPIServer {
         this.metricsApi = new MetricsAPI(router, apiKey);
     }
 
-    public start() {
-        this.server = Bun.serve({
-            fetch: this.metricsApi.app.fetch,
-            port: this.port,
-            hostname: this.host
-        });
-        console.log(`Metrics API Server started on http://${this.host}:${this.port}`);
-    }
-
-    public getApp() {
-        return this.metricsApi.app;
-    }
-
-    public stop() {
-        if (this.server) {
-            this.server.stop();
+    public start(): void {
+        if (typeof globalThis.Bun !== 'undefined') {
+            // Bun runtime: use native Bun.serve
+            this.server = (globalThis as any).Bun.serve({
+                fetch: this.metricsApi.app.fetch,
+                port: this.port,
+                hostname: this.host,
+            });
+            console.log(`Metrics API Server started on http://${this.host}:${this.port}`);
+        } else {
+            // Node.js runtime: lightweight fetch bridge over node:http
+            const app = this.metricsApi.app;
+            this.server = createServer(async (req, res) => {
+                const url = `http://${req.headers.host ?? this.host}${req.url}`;
+                const init: RequestInit = {
+                    method: req.method ?? 'GET',
+                    headers: Object.fromEntries(
+                        Object.entries(req.headers)
+                            .filter(([ , v]) => v !== undefined)
+                            .map(([k, v]) => [k, Array.isArray(v) ? v.join(', ') : v as string])
+                    ),
+                };
+                if (req.method !== 'GET' && req.method !== 'HEAD') {
+                    const chunks: Buffer[] = [];
+                    for await (const chunk of req) chunks.push(chunk as Buffer);
+                    init.body = Buffer.concat(chunks);
+                }
+                const response = await app.fetch(new Request(url, init));
+                const headers: Record<string, string> = {};
+                response.headers.forEach((v, k) => { headers[k] = v; });
+                res.writeHead(response.status, headers);
+                res.end(Buffer.from(await response.arrayBuffer()));
+            });
+            this.server.listen(this.port, this.host, () => {
+                console.log(`Metrics API Server started on http://${this.host}:${this.port}`);
+            });
         }
+    }
+
+    public stop(): void {
+        if (!this.server) return;
+        // Bun server has .stop(), Node.js Server has .close()
+        if (typeof (this.server as any).stop === 'function') {
+            (this.server as any).stop();
+        } else if (typeof (this.server as Server).close === 'function') {
+            (this.server as Server).close();
+        }
+        this.server = null;
     }
 }

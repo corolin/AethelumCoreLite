@@ -2,6 +2,11 @@ import crypto from 'crypto';
 import { AsyncLocalStorage } from 'async_hooks';
 import { auditLogger } from '../utils/logger.js';
 
+/**
+ * @deprecated 本模块为原审查流水线的内容安全审计业务（LLM 提示词 + 防注入 token），
+ * 自本版本起废弃：审查机制交由 Agent 层实现，框架不再关心内容审查。
+ * 保留仅为兼容旧版，后续版本将移除。
+ */
 // ─── Public Types ─────────────────────────────────────────────
 
 export interface AuditState {

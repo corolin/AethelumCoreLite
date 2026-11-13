@@ -76,12 +76,16 @@ export class WALPtrTracker {
         const tmpPath = `${this.ptrPath}.${crypto.randomBytes(4).toString('hex')}.tmp`;
         await fs.promises.writeFile(tmpPath, lsn.toString(), 'utf8');
         await fs.promises.rename(tmpPath, this.ptrPath);
-        // 对目录进行同步以确保 rename 持久化
-        try {
-            const dirFd = await fs.promises.open(path.dirname(this.ptrPath), 'r');
-            await dirFd.sync();
-            await dirFd.close();
-        } catch {}
+        // 对目录进行同步以确保 rename 持久化（Windows 跳过，确保 finally 关闭）
+        if (process.platform !== 'win32') {
+            let dirFd: fs.promises.FileHandle | undefined;
+            try {
+                dirFd = await fs.promises.open(path.dirname(this.ptrPath), 'r');
+                await dirFd.sync();
+            } catch {} finally {
+                if (dirFd) await dirFd.close().catch(() => {});
+            }
+        }
     }
 
     public stop(): void {
@@ -117,9 +121,9 @@ export class ImprovedWALWriter {
     private lastCommittedLsn: number = 0;
     private commitTimer: NodeJS.Timeout | null = null;
 
-    // 压缩防抖
+    // 首次删除后安排一次压缩，后续删除共享同一个定时器。
     private compactTimer: NodeJS.Timeout | null = null;
-    private compactDebounceMs = 2000;
+    private compactDelayMs = 2000;
 
     constructor(queueId: string, walDir: string = "wal_data_v2", enableWal: boolean = true, maxSegmentSize: number = 100 * 1024 * 1024) {
         this.queueId = queueId;
@@ -200,22 +204,28 @@ export class ImprovedWALWriter {
             await fs.promises.appendFile(this.currentSegmentPath, record, 'utf8');
             
             // 确保物理同步
+            let segFd: fs.promises.FileHandle | undefined;
             try {
-                const fd = await fs.promises.open(this.currentSegmentPath, 'r+');
-                await fd.datasync();
-                await fd.close();
-            } catch {}
+                segFd = await fs.promises.open(this.currentSegmentPath, 'r+');
+                await segFd.datasync();
+            } catch {} finally {
+                if (segFd) await segFd.close().catch(() => {});
+            }
 
             const stats = await fs.promises.stat(this.currentSegmentPath);
             if (stats.size >= this.maxSegmentSize) {
                 this.currentSegmentNum++;
                 this.currentSegmentPath = path.join(this.walDir, `log1_${this.currentSegmentNum.toString().padStart(6, '0')}.wal`);
                 // 对目录进行同步
-                try {
-                    const dirFd = await fs.promises.open(this.walDir, 'r');
-                    await dirFd.sync();
-                    await dirFd.close();
-                } catch {}
+                if (process.platform !== 'win32') {
+                    let dirFd: fs.promises.FileHandle | undefined;
+                    try {
+                        dirFd = await fs.promises.open(this.walDir, 'r');
+                        await dirFd.sync();
+                    } catch {} finally {
+                        if (dirFd) await dirFd.close().catch(() => {});
+                    }
+                }
             }
 
             return lsn;
@@ -249,11 +259,13 @@ export class ImprovedWALWriter {
             await fs.promises.appendFile(this.currentSegmentPath, record, 'utf8');
             
             // 确保物理同步
+            let delFd: fs.promises.FileHandle | undefined;
             try {
-                const fd = await fs.promises.open(this.currentSegmentPath, 'r+');
-                await fd.datasync();
-                await fd.close();
-            } catch {}
+                delFd = await fs.promises.open(this.currentSegmentPath, 'r+');
+                await delFd.datasync();
+            } catch {} finally {
+                if (delFd) await delFd.close().catch(() => {});
+            }
 
             this.scheduleCompaction();
         }).catch(err => {
@@ -261,8 +273,19 @@ export class ImprovedWALWriter {
         });
     }
 
+    /**
+     * 判断 LSN 是否属于本队列分配过的区间（用于确认删除时防止误删其他队列的 WAL 记录）。
+     *
+     * 本队列 pre-put 分配的 LSN 恒小于当前分配游标（分配器递增），恢复重放的旧 LSN 亦然；
+     * 因此 `0 < lsn < currentLsn` 即可判定归属，跨重启语义安全。
+     */
+    public ownsLsn(lsn: number): boolean {
+        if (!this.enableWal || !this.lsnAllocator) return false;
+        return lsn > 0 && lsn < this.lsnAllocator.getCurrentLsn();
+    }
+
     private scheduleCompaction() {
-        if (this.compactTimer) clearTimeout(this.compactTimer);
+        if (this.compactTimer) return;
         this.compactTimer = setTimeout(() => {
             this.writeMutex.runExclusive(async () => {
                 await this.compactWalSegments();
@@ -270,7 +293,24 @@ export class ImprovedWALWriter {
                 console.error(`[WAL Writer ${this.queueId}] 压缩 WAL 失败:`, err);
             });
             this.compactTimer = null;
-        }, this.compactDebounceMs).unref();
+        }, this.compactDelayMs).unref();
+    }
+
+    /**
+     * 立即执行一次 WAL 段压缩（运维 API，v1.1.1 F3）。
+     *
+     * 与写路径互斥（writeMutex）；未启用 WAL 时为 no-op；会取消尚未到期的压缩调度。
+     * 适用于长期运行的显式治理（如低峰期定时触发、运维探针），不依赖写删除后的自动调度。
+     */
+    public async compactNow(): Promise<void> {
+        if (!this.enableWal) return;
+        if (this.compactTimer) {
+            clearTimeout(this.compactTimer);
+            this.compactTimer = null;
+        }
+        await this.writeMutex.runExclusive(async () => {
+            await this.compactWalSegments();
+        });
     }
 
     private async compactWalSegments() {
@@ -284,48 +324,46 @@ export class ImprovedWALWriter {
 
         const deletedLsns = new Set<number>();
         const segContent = new Map<number, string[]>();
+        const segmentsWithDeletes = new Set<number>();
 
         // 1. 收集全量 DEL 和 Log1
         for (const seg of segNums) {
             const segPath = path.join(this.walDir, `log1_${seg.toString().padStart(6, '0')}.wal`);
-            try {
-                const content = await fs.promises.readFile(segPath, 'utf8');
-                const lines = content.split('\n').filter(Boolean);
-                const log1Lines: string[] = [];
-                for (const line of lines) {
-                    if (line.startsWith('DEL|')) {
-                        const lsn = parseInt(line.substring(4), 10);
-                        if (!isNaN(lsn)) deletedLsns.add(lsn);
-                    } else {
-                        log1Lines.push(line);
-                    }
+            const content = await fs.promises.readFile(segPath, 'utf8');
+            const lines = content.split('\n').filter(Boolean);
+            const log1Lines: string[] = [];
+            for (const line of lines) {
+                if (line.startsWith('DEL|')) {
+                    segmentsWithDeletes.add(seg);
+                    const lsn = parseInt(line.substring(4), 10);
+                    if (!isNaN(lsn)) deletedLsns.add(lsn);
+                } else {
+                    log1Lines.push(line);
                 }
-                segContent.set(seg, log1Lines);
-            } catch {}
+            }
+            segContent.set(seg, log1Lines);
         }
 
-        // 2. 按顺序安全重写
-        for (const seg of segNums) {
+        // 全部读成功后才按段号顺序重写。
+        for (const [seg, log1Lines] of segContent) {
             const segPath = path.join(this.walDir, `log1_${seg.toString().padStart(6, '0')}.wal`);
-            const log1Lines = segContent.get(seg) || [];
             const keptLines = log1Lines.filter(line => {
                 const lsn = parseInt(line.split('|')[0]!, 10);
                 return !deletedLsns.has(lsn);
             });
 
-            try {
-                if (keptLines.length === 0) {
-                    if (seg === this.currentSegmentNum) {
-                        await fs.promises.writeFile(segPath, '', 'utf8');
-                    } else {
-                        await fs.promises.unlink(segPath);
-                    }
+            if (!segmentsWithDeletes.has(seg) && keptLines.length === log1Lines.length && keptLines.length > 0) continue;
+            if (keptLines.length === 0) {
+                if (seg === this.currentSegmentNum) {
+                    await fs.promises.writeFile(segPath, '', 'utf8');
                 } else {
-                    const tmpPath = `${segPath}.compact.tmp`;
-                    await fs.promises.writeFile(tmpPath, keptLines.join('\n') + '\n', 'utf8');
-                    await fs.promises.rename(tmpPath, segPath);
+                    await fs.promises.unlink(segPath);
                 }
-            } catch {}
+            } else {
+                const tmpPath = `${segPath}.compact.tmp`;
+                await fs.promises.writeFile(tmpPath, keptLines.join('\n') + '\n', 'utf8');
+                await fs.promises.rename(tmpPath, segPath);
+            }
         }
     }
 
@@ -348,7 +386,9 @@ export class ImprovedWALWriter {
             await this.writeMutex.runExclusive(async () => {
                 await this.compactWalSegments();
             });
-        } catch {}
+        } catch (err) {
+            console.error(`[WAL Writer ${this.queueId}] 停止时压缩失败:`, err);
+        }
 
         this.ptrTracker?.stop();
     }

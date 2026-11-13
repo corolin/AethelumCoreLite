@@ -10,6 +10,10 @@ import {
     type HookPluginSpec,
 } from '../hooks/runtime.js';
 import type { WALRecoveredEntry } from '../utils/wal_writer.js';
+import { getStructuredLogger } from '../utils/structured_logger.js';
+
+/** 队列层结构化日志（错误/告警/生命周期事件可聚合；流量日志保留 console 可读性） */
+const queueLogger = getStructuredLogger('AsyncSynapticQueue');
 
 export interface QueueMetrics {
     queueId: string;
@@ -35,14 +39,28 @@ export class AsyncSynapticQueue {
     private metrics: QueueMetrics;
     private hooks: AsyncHookChain;
     public autoExpand: boolean;
+    public evictOldestOnFull: boolean;
     private baseCapacity: number;
     private shrinkTimer: NodeJS.Timeout | null = null;
     private pluginDisposers: Array<() => void | Promise<void>> = [];
+    private _closed: boolean = false;
+    /**
+     * 丢弃归宿回调：消息被本队列丢弃（过期/钩子拦截）时通知 Router 登记 Q_SINK，
+     * 保证“每个脉冲都有归宿”（消息守恒）。由 Router 注册队列时注入。
+     */
+    public onDiscard?: (impulse: NeuralImpulse, reason: string) => Promise<boolean | void>;
 
-    constructor(queueId: string, maxSize: number = 0, autoExpand: boolean = true, shrinkIntervalMs: number = 10 * 60 * 1000) {
+    constructor(
+        queueId: string,
+        maxSize: number = 0,
+        autoExpand: boolean = true,
+        shrinkIntervalMs: number = 10 * 60 * 1000,
+        evictOldestOnFull: boolean = false,
+    ) {
         this.queueId = queueId;
         this.maxSize = maxSize;
         this.autoExpand = autoExpand;
+        this.evictOldestOnFull = evictOldestOnFull;
         this.baseCapacity = maxSize;
         this.hooks = new AsyncHookChain(`${queueId}_hooks`);
 
@@ -79,9 +97,13 @@ export class AsyncSynapticQueue {
     /**
      * 异步放入消息 (零锁设计，天然线程安全)
      */
-    public async asyncPut(item: NeuralImpulse): Promise<boolean> {
+    public async asyncPut(item: NeuralImpulse, onDiscarded?: () => void): Promise<boolean> {
+        if (this._closed) return false;
         if (this.maxSize > 0 && this.metrics.size >= this.maxSize) {
-            if (this.autoExpand) {
+            if (this.evictOldestOnFull) {
+                // 环形缓冲语义：淘汰最旧的一条消息
+                this.evictOldest();
+            } else if (this.autoExpand) {
                 // 动态扩容：每次增加 10%
                 this.maxSize = Math.ceil(this.maxSize * 1.1);
                 this.metrics.capacity = this.maxSize;
@@ -110,14 +132,18 @@ export class AsyncSynapticQueue {
             };
 
             const processedItem = await this.hooks.executeHooks(item, HookType.QUEUE_BEFORE_PUT, context);
-            if (!processedItem) {
-                // 如果钩子返回 null，视为该消息被拦截，丢弃之
+            const expiredOnHandoff = processedItem && this.waitingConsumers.length > 0 && processedItem.isExpired();
+            if (!processedItem || expiredOnHandoff) {
+                const discarded = processedItem ?? item;
+                const reason = processedItem ? 'expired' : 'before_put_intercepted';
+                const handled = await this.discard(discarded, reason);
                 this.metrics.size--;
-                this.metrics.totalDropped++;
-                return true; // 虽然被拦截，但对调用方来说已“处理”完成
+                onDiscarded?.();
+                return handled;
             }
 
             const impulseToPut = processedItem;
+            impulseToPut.markHop(`${this.queueId}:enqueue`);
 
             // 📊 消息流动日志：入队
             const fromAgent = impulseToPut.sourceAgent || 'Unknown';
@@ -137,7 +163,13 @@ export class AsyncSynapticQueue {
                 console.log(directMsg);
                 globalThis.logRaw?.(directMsg);
                 // 直接投递路径也需要记录来源信息，确保 Router 能正确写 Log2 (via AFTER_ACK Hooks)
+                // 同时快照本队列写入的 WAL LSN，供移交确认时精确 tombstone 本队列 Log1
                 impulseToPut.metadata['_src_queue_id'] = this.queueId;
+                const directSrcLsn = impulseToPut.metadata['wal_lsn'];
+                if (typeof directSrcLsn === 'number') {
+                    impulseToPut.metadata['_src_wal_lsn'] = directSrcLsn;
+                }
+                impulseToPut.markHop(`${this.queueId}:dequeue`);
                 consumer.resolve(impulseToPut);
                 return true;
             }
@@ -155,9 +187,42 @@ export class AsyncSynapticQueue {
     }
 
     /**
+     * 从最低优先级到最高优先级淘汰一条最旧的消息（用于环形缓冲队列）
+     */
+    private evictOldest(): void {
+        for (let p = 4; p >= 0; p--) {
+            if (this.queues[p]!.length > 0) {
+                const evicted = this.queues[p]!.shift();
+                if (evicted) {
+                    this.metrics.size--;
+                    this.metrics.totalDropped++;
+                    return;
+                }
+            }
+        }
+    }
+
+    /**
+     * 关闭队列：唤醒所有等待中的 consumer，后续 asyncGet 立即返回 null。
+     * 用于 graceful shutdown 时打破 asyncGet 的阻塞等待。
+     */
+    public close(): void {
+        this._closed = true;
+        const consumers = this.waitingConsumers;
+        this.waitingConsumers = [];
+        for (const c of consumers) {
+            if (c.timeoutId) clearTimeout(c.timeoutId);
+            c.resolve(null);
+        }
+    }
+
+    /**
      * 异步获取消息
      */
     public async asyncGet(timeoutMs?: number): Promise<NeuralImpulse | null> {
+        // 队列已关闭，立即返回 null（打破 Worker/Platform 的阻塞等待）
+        if (this._closed) return null;
+
         // 1. 使用循环遍历优先级队列，跳过过期消息（避免递归栈溢出）
         while (true) {
             let foundExpired = false;
@@ -169,19 +234,19 @@ export class AsyncSynapticQueue {
 
                     // 跳过已过期的消息，继续循环查找下一个
                     if (item.isExpired()) {
-                        const expireMsg = `⏰ [DEQUEUE] ${item.sessionId} | ${this.queueId} → 消息已过期，丢弃`;
-                        console.log(expireMsg);
-                        globalThis.logRaw?.(expireMsg);
-                        
-                        // 过期消息直接丢弃，触发确认钩子以释放资源（如 WAL tombstone）
-                        await this.confirmDelivery(item);
-                        
+                        await this.discard(item, 'expired');
                         foundExpired = true;
                         break; // 跳出 for 循环，重新从头遍历优先级
                     }
 
-                    // 记录来源队列 ID，供 Router/Worker 在移交完成后确认
+                    // 记录来源队列 ID 与本队列写入的 WAL LSN，供 Router/Worker 在移交完成后确认（tombstone 本队列 Log1）
+                    // 注意：此时消息尚未进入下一跳，wal_lsn 仍是本队列 pre-put 写入的值
                     item.metadata['_src_queue_id'] = this.queueId;
+                    const srcLsn = item.metadata['wal_lsn'];
+                    if (typeof srcLsn === 'number') {
+                        item.metadata['_src_wal_lsn'] = srcLsn;
+                    }
+                    item.markHop(`${this.queueId}:dequeue`);
 
                     // 消息流动日志：出队
                     const dequeueMsg = `⬆️  [DEQUEUE] ${item.sessionId} | ${this.queueId} → Worker | remaining: ${this.metrics.size}`;
@@ -210,7 +275,33 @@ export class AsyncSynapticQueue {
             }
 
             this.waitingConsumers.push(consumer);
+
+            // 🔧 防止 close() 在 asyncGet 检查 _closed 之后、push 之前被调用导致消费者永久挂起
+            // 在 push 之后再检查一次 _closed，若已关闭则立即 resolve
+            if (this._closed) {
+                const index = this.waitingConsumers.indexOf(consumer);
+                if (index !== -1) {
+                    this.waitingConsumers.splice(index, 1);
+                }
+                if (consumer.timeoutId) {
+                    clearTimeout(consumer.timeoutId);
+                }
+                resolve(null);
+            }
         });
+    }
+
+    private async discard(item: NeuralImpulse, reason: string): Promise<boolean> {
+        this.metrics.totalDropped++;
+        if (reason === 'expired') item.markHop(`${this.queueId}:expire`);
+        const lsn = item.metadata['wal_lsn'] as number | undefined;
+        const registered = await this.onDiscard?.(item, reason);
+        if (registered === false) return false;
+        await this.confirmDelivery(item, lsn);
+        queueLogger.warning('队列丢弃消息', {
+            metadata: { queueId: this.queueId, sessionId: item.sessionId, reason },
+        });
+        return true;
     }
 
     /**
@@ -237,6 +328,10 @@ export class AsyncSynapticQueue {
         return this.metrics.size === 0;
     }
 
+    public isClosed(): boolean {
+        return this._closed;
+    }
+
     public getMetrics(): QueueMetrics {
         return { ...this.metrics }; // 返回副本
     }
@@ -259,7 +354,9 @@ export class AsyncSynapticQueue {
             clearInterval(this.shrinkTimer);
             this.shrinkTimer = null;
         }
-        // 关键改进：停止时立刻唤醒所有在排队等待消息的 Consumer (Worker)
+        // 关闭队列：标记 _closed 并唤醒所有等待中的 consumer
+        this.close();
+        // 清空队列内容
         this.clear();
         await disposeHookPluginDisposers(this.pluginDisposers);
     }
@@ -300,6 +397,9 @@ export class AsyncSynapticQueue {
             this.metrics.totalMessages++;
         } catch (err) {
             console.warn(`[QUEUE ${this.queueId}] 恢复 LSN ${entry.lsn} 失败，跳过:`, err);
+            queueLogger.warning('WAL 恢复条目解析失败，已跳过', {
+                metadata: { queueId: this.queueId, lsn: entry.lsn },
+            });
         }
     }
 }

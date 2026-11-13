@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { readFileSync, existsSync } from 'fs';
 import { resolve, extname } from 'path';
+import { parse as parseToml } from 'smol-toml';
 
 export const MonitoringConfigSchema = z.object({
   enable_prometheus: z.boolean().default(false),
@@ -64,11 +65,7 @@ export class ConfigLoader {
     try {
       const fileContent = readFileSync(resolvedPath, 'utf-8');
       
-      // We use Bun's built-in TOML parser via the Bun global object
-      // (assuming node compatibility makes it visible, or we cast)
-      // Since Bun is available globally in the Bun runtime:
-      // @ts-ignore
-      const parsedData = globalThis.Bun ? Bun.TOML.parse(fileContent) : JSON.parse(fileContent);
+      const parsedData = parseToml(fileContent);
       
       // Validate configuration contents
       const result = AppConfigSchema.safeParse(parsedData);
