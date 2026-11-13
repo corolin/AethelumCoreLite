@@ -34,6 +34,13 @@ export interface HookContext {
      * 避免超时后仍产生副作用或资源泄漏。
      */
     signal?: AbortSignal;
+    /**
+     * 发射旁路脉冲到指定队列（fan-out）。
+     * 由执行方注入：Worker 上下文注入 Router 路由能力，
+     * 供 Hook 在处理过程中向管道注入独立脉冲（如演绎结束 → 旁路到 Live2D Egress）。
+     * Hook 可自行决定是否 await；不 await 即不阻塞主通路流转。
+     */
+    emit?: (impulse: NeuralImpulse, targetQueueId: string) => Promise<boolean>;
     [key: string]: unknown;
 }
 
@@ -43,6 +50,11 @@ export interface AsyncHook {
     priority: number;
     enabled: boolean;
     timeoutMs: number;
+    /**
+     * 尽力而为：为 true 时执行失败/超时仅告警并继续链，不中断消息流转。
+     * 适合生命周期登记、记忆写入、遥测等旁路副作用。
+     */
+    bestEffort: boolean;
 
     executeAsync(impulse: NeuralImpulse, context: HookContext): Promise<NeuralImpulse | null>;
     enable(): void;

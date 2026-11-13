@@ -70,6 +70,12 @@ export class AsyncWorkerMonitor {
         this.consecutiveErrors.set(id, 0);
     }
 
+    public unregisterWorker(workerId: string): void {
+        this.workers.delete(workerId);
+        this.metrics.delete(workerId);
+        this.consecutiveErrors.delete(workerId);
+    }
+
     public start(): void {
         if (this.intervalId) return;
         console.log(`[Monitor] 启动监控守护进程，扫描间隔: ${this.config.checkIntervalMs}ms`);

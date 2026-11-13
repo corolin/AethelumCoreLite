@@ -62,9 +62,25 @@ export class WALHookManager {
                 super(`WAL_POST_${self.queueId}`, HookType.QUEUE_AFTER_ACK, 100);
             }
             async executeAsync(impulse: NeuralImpulse, context: HookContext): Promise<NeuralImpulse | null> {
-                // 优先使用上下文中的显式 LSN（通常来自源队列确认）
+                // 优先使用上下文中的显式 LSN（通常来自源队列确认，即移交成功后的 tombstone）
                 const explicitLsn = context.explicitLsn as number | undefined;
-                const targetLsn = explicitLsn !== undefined ? explicitLsn : impulse.metadata['wal_lsn'] as number | undefined;
+                let targetLsn = explicitLsn;
+
+                if (targetLsn === undefined) {
+                    // 无显式来源 LSN：覆盖“过期/拦截直接丢弃”等未移交场景的兜底删除。
+                    // 此时消息尚未进入下一跳，wal_lsn 仍为本队列 pre-put 写入的值，
+                    // 必须校验归属后再删，防止误把其他队列的 LSN 当作本队列记录 tombstone。
+                    const fallbackLsn = impulse.metadata['wal_lsn'] as number | undefined;
+                    if (fallbackLsn !== undefined) {
+                        if (self.walWriter.ownsLsn(fallbackLsn)) {
+                            targetLsn = fallbackLsn;
+                        } else {
+                            console.warn(
+                                `[WAL ${self.queueId}] confirmDelivery 缺少来源 LSN，且 wal_lsn=${fallbackLsn} 不属于本队列，已跳过 tombstone（防止误删）`,
+                            );
+                        }
+                    }
+                }
 
                 if (targetLsn !== undefined) {
                     await self.walWriter.writeDelete(targetLsn);

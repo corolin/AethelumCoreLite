@@ -97,17 +97,34 @@ export class AsyncHookChain {
                     currentImpulse = null;
                 }
             } catch (error) {
-                console.error(`[HookChain ${this.name}] Hook ${hook.name} 执行失败:`, error);
+                const isTimeout = error instanceof Error && /timeout$/i.test(error.message);
+                const status = isTimeout ? HookExecutionStatus.TIMEOUT : HookExecutionStatus.FAILED;
+                console.error(`[HookChain ${this.name}] Hook ${hook.name} 执行${isTimeout ? '超时' : '失败'}:`, error);
 
-                // 标记失败状态
+                if (hook.bestEffort) {
+                    // 尽力而为钩子：失败/超时仅告警并记录警告元数据，不污染主消息状态，不中断消息流转
+                    console.warn(
+                        `[HookChain ${this.name}] best-effort Hook ${hook.name} ${isTimeout ? '超时' : '失败'}，已跳过并继续链`,
+                    );
+                    if (currentImpulse) {
+                        const warnings = (currentImpulse.metadata['hook_warnings'] as any[]) || [];
+                        warnings.push({
+                            hook: hook.name,
+                            error: error instanceof Error ? error.message : String(error),
+                            status,
+                        });
+                        currentImpulse.metadata['hook_warnings'] = warnings;
+                    }
+                    continue;
+                }
+
+                // 必需钩子：标记失败并抛出异常，让外层的 Worker 错误处理器接管
                 if (currentImpulse) {
                     currentImpulse.status = MessageStatus.FAILED;
                     currentImpulse.metadata['error_hook'] = hook.name;
                     currentImpulse.metadata['error_message'] = error instanceof Error ? error.message : String(error);
-                    currentImpulse.metadata['hook_execution_status'] = HookExecutionStatus.FAILED;
+                    currentImpulse.metadata['hook_execution_status'] = status;
                 }
-
-                // 把异常抛出，让外层的 Worker 错误处理器接管
                 throw error;
             }
         }
@@ -125,18 +142,21 @@ export abstract class BaseAsyncHook implements AsyncHook {
     public priority: number;
     public enabled: boolean;
     public timeoutMs: number;
+    public bestEffort: boolean;
 
     constructor(
         name: string,
         hookType: HookType,
         priority: number = 0,
-        timeoutMs: number = 5000
+        timeoutMs: number = 5000,
+        bestEffort: boolean = false,
     ) {
         this.name = name;
         this.hookType = hookType;
         this.priority = priority;
         this.enabled = true;
         this.timeoutMs = timeoutMs;
+        this.bestEffort = bestEffort;
     }
 
     public enable(): void {

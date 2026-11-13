@@ -21,6 +21,8 @@ export const getLogger = (name: string) => getStructuredLogger(name);
 export const neuralLogger = setupLogger("AsyncNeuralSomaRouter", "INFO");
 export const queueLogger = setupLogger("AsyncSynapticQueue", "INFO");
 export const workerLogger = setupLogger("AsyncAxonWorker", "INFO");
+// @deprecated 属原审查流水线（AuditAgent 日志器），随审查流程废弃；
+// 审查机制交由 Agent 层处理，Agent 可自行创建日志器。
 export const auditLogger = setupLogger("AuditAgent", "INFO");
 
 export const logPerformance = (operationName: string) => {

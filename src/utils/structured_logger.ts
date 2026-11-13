@@ -55,27 +55,63 @@ export abstract class LogFormatter {
 }
 
 export class JsonFormatter extends LogFormatter {
-    constructor(private pretty: boolean = false) {
+    constructor(private pretty: boolean = false, private timezone?: string) {
         super();
     }
 
+    private resolveTimezone(): string | undefined {
+        if (!this.timezone) return undefined;
+        return this.timezone === 'local'
+            ? Intl.DateTimeFormat().resolvedOptions().timeZone
+            : this.timezone;
+    }
+
     format(entry: LogEntry): string {
-        const data = {
+        const date = new Date(entry.timestamp * 1000);
+        const tz = this.resolveTimezone();
+        const data: Record<string, any> = {
             ...entry,
             level: LogLevel[entry.level],
-            timestamp_iso: new Date(entry.timestamp * 1000).toISOString(),
+            timestamp_iso: date.toISOString(),
         };
+        if (tz) {
+            data.timestamp_local = new Intl.DateTimeFormat('sv-SE', {
+                timeZone: tz,
+                year: 'numeric', month: '2-digit', day: '2-digit',
+                hour: '2-digit', minute: '2-digit', second: '2-digit',
+                hour12: false,
+            }).format(date);
+        }
         return this.pretty ? JSON.stringify(data, null, 2) : JSON.stringify(data);
     }
 }
 
 export class PlainFormatter extends LogFormatter {
-    constructor(private include_metadata: boolean = false) {
+    constructor(
+        private include_metadata: boolean = false,
+        private timezone?: string,
+    ) {
         super();
     }
 
+    private formatTimestamp(tsSeconds: number): string {
+        const date = new Date(tsSeconds * 1000);
+        const tz = this.timezone === 'local'
+            ? Intl.DateTimeFormat().resolvedOptions().timeZone
+            : this.timezone;
+        if (tz) {
+            return new Intl.DateTimeFormat('sv-SE', {
+                timeZone: tz,
+                year: 'numeric', month: '2-digit', day: '2-digit',
+                hour: '2-digit', minute: '2-digit', second: '2-digit',
+                hour12: false,
+            }).format(date);
+        }
+        return date.toISOString().replace('T', ' ').slice(0, 19);
+    }
+
     format(entry: LogEntry): string {
-        const timestamp = new Date(entry.timestamp * 1000).toISOString().replace('T', ' ').slice(0, 19);
+        const timestamp = this.formatTimestamp(entry.timestamp);
         let base_msg = `${timestamp} - [${LogLevel[entry.level]}] - ${entry.logger_name} - ${entry.message}`;
 
         if (entry.module) {
@@ -255,10 +291,13 @@ class LoggerManager {
             ));
         }
 
+        const timezone: string | undefined = finalConfig.timezone;
         const usePlain =
             finalConfig.format === LogFormat.PLAIN ||
             finalConfig.format === 'plain';
-        const formatter = usePlain ? new PlainFormatter() : new JsonFormatter();
+        const formatter = usePlain
+            ? new PlainFormatter(finalConfig.include_metadata ?? false, timezone)
+            : new JsonFormatter(finalConfig.pretty ?? false, timezone);
 
         const logger = new StructuredLogger(
             name,

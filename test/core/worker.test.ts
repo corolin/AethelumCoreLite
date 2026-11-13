@@ -90,25 +90,30 @@ describe("AsyncAxonWorker - Unit Tests", () => {
 
     test("Base class auto-routes if child doesn't route manually", async () => {
         router.activate();
-        const autoWorker = new AutoRoutingTestWorker("AutoAgent", inputQueue, router);
+        // 使用独立队列，避免与 beforeEach 注册的 worker 竞争
+        const autoInputQueue = new AsyncSynapticQueue("AUTO_IN", 10, false);
+        router.registerQueue(autoInputQueue);
+        const autoWorker = new AutoRoutingTestWorker("AutoAgent", autoInputQueue, router);
         const routerSpy = spyOn(router, "routeMessage");
 
-        await autoWorker.start();
+        try {
+            await autoWorker.start();
 
-        const qDefault = new AsyncSynapticQueue("DEFAULT_TARGET", 10, false);
-        router.registerQueue(qDefault);
+            const qDefault = new AsyncSynapticQueue("DEFAULT_TARGET", 10, false);
+            router.registerQueue(qDefault);
 
-        const impulse = new NeuralImpulse({ actionIntent: "DEFAULT_TARGET", content: "auto_route" });
-        await inputQueue.asyncPut(impulse);
+            const impulse = new NeuralImpulse({ actionIntent: "DEFAULT_TARGET", content: "auto_route" });
+            await autoInputQueue.asyncPut(impulse);
 
-        await new Promise(r => setTimeout(r, 50));
+            await new Promise(r => setTimeout(r, 100));
 
-        // Should be auto-routed to actionIntent DEFAULT_TARGET
-        expect(routerSpy).toHaveBeenCalledTimes(1);
-        const routeArgs = routerSpy.mock.calls[0] as any[];
-        expect(routeArgs[1]).toBe("DEFAULT_TARGET");
-
-        await autoWorker.stop();
+            // Should be auto-routed to actionIntent DEFAULT_TARGET
+            expect(routerSpy).toHaveBeenCalledTimes(1);
+            const routeArgs = routerSpy.mock.calls[0] as any[];
+            expect(routeArgs[1]).toBe("DEFAULT_TARGET");
+        } finally {
+            await autoWorker.stop();
+        }
     });
     test("Base class default process() is a no-op", async () => {
         // Create a worker without overriding process
