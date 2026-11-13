@@ -198,7 +198,7 @@ export class ImprovedWALWriter {
         return await this.writeMutex.runExclusive(async () => {
             const lsn = this.lsnAllocator!.nextLsn();
             const payload = JSON.stringify(data);
-            const checksum = crypto.createHash('md5').update(payload).digest('hex').substring(0, 8);
+            const checksum = ImprovedWALWriter.computeChecksum(payload);
             const record = `${lsn}|${checksum}|${Buffer.byteLength(payload)}|${payload}\n`;
 
             await fs.promises.appendFile(this.currentSegmentPath, record, 'utf8');
@@ -432,6 +432,10 @@ export class ImprovedWALWriter {
         return uncommitted;
     }
 
+    private static computeChecksum(payload: string): string {
+        return crypto.createHash('sha256').update(payload).digest('hex').substring(0, 8);
+    }
+
     private parseRecord(line: string): WALRecoveredEntry | null {
         try {
             const parts = line.split('|');
@@ -442,7 +446,7 @@ export class ImprovedWALWriter {
             const payload = parts.slice(3).join('|');
             if (isNaN(lsn) || isNaN(payloadLen)) return null;
 
-            const actualChecksum = crypto.createHash('md5').update(payload).digest('hex').substring(0, 8);
+            const actualChecksum = ImprovedWALWriter.computeChecksum(payload);
             if (actualChecksum !== checksum) return null;
 
             const dict = JSON.parse(payload);
