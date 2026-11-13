@@ -57,7 +57,7 @@ Zod schema 定义（`AppConfigSchema`），从 TOML 文件加载（`config.toml`
 
 ### 监控 API（`src/api/`）
 
-基于 Hono 的 REST API，必须设置 apiKey（Bearer token 认证）。端点：`/api/v1/health`、`/api/v1/metrics`。MetricsAPIServer 使用 `Bun.serve()` 启动。
+基于原生 Web `Request`/`Response` 的轻量级 REST API，必须设置 apiKey（Bearer token 认证）。端点：`/api/v1/health`、`/api/v1/metrics`。MetricsAPIServer 支持 `Bun.serve()` 与 `node:http` 双运行时启动。
 
 ### 自我优化模块（`src/core/self-refining/`）
 
