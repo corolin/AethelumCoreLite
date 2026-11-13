@@ -1,10 +1,21 @@
-import { Hono } from 'hono';
+import { timingSafeEqual } from 'node:crypto';
 import { createServer } from 'node:http';
 import type { Server } from 'node:http';
 import type { CoreLiteRouter } from '../core/router.js';
 
+export interface FetchApp {
+    fetch: (req: Request) => Promise<Response>;
+}
+
+function safeTokenEquals(a: string, b: string): boolean {
+    const bufA = Buffer.from(a);
+    const bufB = Buffer.from(b);
+    if (bufA.length !== bufB.length) return false;
+    return timingSafeEqual(bufA, bufB);
+}
+
 export class MetricsAPI {
-    public app: Hono;
+    public app: FetchApp;
     private _router: CoreLiteRouter | null;
     private _apiKey: string;
     private _requireAuth: boolean;
@@ -14,40 +25,45 @@ export class MetricsAPI {
         this._apiKey = apiKey || '';
         this._requireAuth = !!apiKey; // 有 apiKey 才需要认证
 
-        this.app = new Hono();
-        this.setupRoutes();
+        this.app = {
+            fetch: (req: Request) => this.fetch(req),
+        };
     }
 
-    private setupRoutes() {
-        // Middleware for Auth — 直接读取 this._apiKey，确保 setApiKey() 轮换后立即生效
-        this.app.use('/api/v1/*', async (c, next) => {
-            if (!this._requireAuth) {
-                return await next(); // 无认证模式，直接放行
-            }
-            const authHeader = c.req.header('Authorization');
-            if (!authHeader || !authHeader.startsWith('Bearer ') || authHeader.slice(7) !== this._apiKey) {
-                return c.json({ error: 'Unauthorized' }, 401);
-            }
-            await next();
-        });
+    public async fetch(req: Request): Promise<Response> {
+        let pathname: string;
+        try {
+            pathname = new URL(req.url, 'http://localhost').pathname;
+        } catch {
+            return Response.json({ error: 'Bad Request' }, { status: 400 });
+        }
 
-        this.app.get('/api/v1/health', (c) => {
-            return c.json({
+        // Auth 校验 — 直接读取 this._apiKey，确保 setApiKey() 轮换后立即生效
+        if (pathname.startsWith('/api/v1/') && this._requireAuth) {
+            const authHeader = req.headers.get('Authorization');
+            if (!authHeader || !authHeader.startsWith('Bearer ') || !safeTokenEquals(authHeader.slice(7), this._apiKey)) {
+                return Response.json({ error: 'Unauthorized' }, { status: 401 });
+            }
+        }
+
+        if (req.method === 'GET' && pathname === '/api/v1/health') {
+            return Response.json({
                 status: 'healthy',
                 timestamp: Date.now() / 1000,
                 service: 'aethelum-core-lite',
-                authenticated: this._requireAuth
+                authenticated: this._requireAuth,
             });
-        });
+        }
 
-        this.app.get('/api/v1/metrics', async (c) => {
+        if (req.method === 'GET' && pathname === '/api/v1/metrics') {
             if (!this._router) {
-                return c.json({ detail: "Router not initialized" }, 503);
+                return Response.json({ detail: 'Router not initialized' }, { status: 503 });
             }
             const metrics = this._router.getQueueMetrics();
+            return Response.json(metrics);
+        }
 
-            return c.json(metrics);
-        });
+        return Response.json({ error: 'Not Found' }, { status: 404 });
     }
 
     public setRouter(router: CoreLiteRouter) {
