@@ -1,13 +1,17 @@
-import { describe, expect, test, beforeEach, afterEach } from "bun:test";
+import { describe, expect, test, beforeEach, afterEach, spyOn } from "bun:test";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { AsyncSynapticQueue } from "../../src/core/queue.js";
 import { NeuralImpulse, MessagePriority } from "../../src/core/message.js";
+import { WALHookManager } from "../../src/hooks/wal_hook.js";
 
 describe("AsyncSynapticQueue - Unit Tests", () => {
     let queue: AsyncSynapticQueue;
 
     beforeEach(() => {
-        // Disable WAL for pure memory queue tests, disable autoExpand for backpressure tests
-        queue = new AsyncSynapticQueue("test_q", 5, false, false);
+        // Pure memory queue tests with autoExpand disabled for backpressure assertions
+        queue = new AsyncSynapticQueue("test_q", 5, false);
     });
 
     afterEach(async () => {
@@ -110,7 +114,7 @@ describe("AsyncSynapticQueue - Unit Tests", () => {
 
     test("shrinkTimer reduces capacity after base reached", async () => {
         // Use a very short interval to trigger it during test
-        queue = new AsyncSynapticQueue("shrink_q", 2, false, true, 10);
+        queue = new AsyncSynapticQueue("shrink_q", 2, false, 10);
         (queue as any).baseCapacity = 2;
         queue.maxSize = 10;
         (queue as any).metrics.capacity = 10;
@@ -121,13 +125,74 @@ describe("AsyncSynapticQueue - Unit Tests", () => {
         expect(queue.maxSize).toBe(2);
     });
 
-    test.skip("WAL initialization failure handles gracefully — 旧版 Queue 曾内置 WAL 初始化，现已移至 Hook 插件；此测试暂时保留以供未来恢复参考", () => {});
+    test("internalReplay handles corrupted WAL payload gracefully and replays valid entry", async () => {
+        const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+        try {
+            queue.internalReplay({ lsn: 1, priority: 2, payload: "{corrupted-json" });
+            expect(warnSpy).toHaveBeenCalled();
+            expect(queue.size()).toBe(0);
 
-    test("confirmDelivery handles no WAL context", () => {
-        const impulse = new NeuralImpulse({ actionIntent: "test" });
-        // Should not throw
-        queue.confirmDelivery(impulse);
+            const validImpulse = new NeuralImpulse({
+                actionIntent: "replayed",
+                priority: MessagePriority.HIGH,
+            });
+            queue.internalReplay({
+                lsn: 2,
+                priority: MessagePriority.HIGH,
+                payload: JSON.stringify(validImpulse.toDict()),
+            });
+
+            expect(queue.size()).toBe(1);
+            const retrieved = await queue.asyncGet(100);
+            expect(retrieved).not.toBeNull();
+            expect(retrieved?.messageId).toBe(validImpulse.messageId);
+            expect(retrieved?.actionIntent).toBe("replayed");
+            expect(retrieved?.metadata["wal_lsn"]).toBe(2);
+        } finally {
+            warnSpy.mockRestore();
+        }
     });
 
-    test.skip("confirmDelivery 缺少来源 LSN 时不误用 wal_lsn — 旧版 Queue 曾内置 WAL 逻辑，现已移至 Hook 插件；此测试暂时保留以供未来恢复参考", () => {});
+    test("confirmDelivery handles no WAL context", async () => {
+        const impulse = new NeuralImpulse({ actionIntent: "test" });
+        // Should not throw
+        await queue.confirmDelivery(impulse);
+    });
+
+    test("confirmDelivery 缺少来源 LSN 时不误用非本队列 wal_lsn，仅本队列 LSN 允许兜底删除", async () => {
+        const dir = await mkdtemp(join(tmpdir(), "wal-confirm-"));
+        const walQueue = new AsyncSynapticQueue("wal_confirm_q", 5, false);
+        const wal = new WALHookManager("wal_confirm_q", dir);
+        await wal.startAndReplay(walQueue);
+        walQueue.getHooks().addHooks([wal.createPrePutHook(), wal.createAfterAckHook()]);
+
+        const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+        const writeDeleteSpy = spyOn((wal as any).walWriter, "writeDelete");
+
+        try {
+            // 场景 1：无显式来源 LSN，且 wal_lsn 不属于本队列（超出当前分配游标）→ 告警并跳过
+            const foreignImpulse = new NeuralImpulse({ actionIntent: "foreign" });
+            foreignImpulse.metadata["wal_lsn"] = 999;
+            await walQueue.confirmDelivery(foreignImpulse);
+
+            expect(warnSpy).toHaveBeenCalled();
+            expect(writeDeleteSpy).not.toHaveBeenCalled();
+
+            // 场景 2：本队列 pre-put 写入获得 wal_lsn=1 → 无显式来源 LSN 时允许兜底删除本队列记录
+            const ownedImpulse = new NeuralImpulse({ actionIntent: "owned" });
+            const putOk = await walQueue.asyncPut(ownedImpulse);
+            expect(putOk).toBe(true);
+            expect(ownedImpulse.metadata["wal_lsn"]).toBe(1);
+
+            await walQueue.confirmDelivery(ownedImpulse);
+            expect(writeDeleteSpy).toHaveBeenCalledWith(1);
+        } finally {
+            warnSpy.mockRestore();
+            writeDeleteSpy.mockRestore();
+            walQueue.clear();
+            await walQueue.stop();
+            await wal.stop();
+            await rm(dir, { recursive: true, force: true });
+        }
+    });
 });
